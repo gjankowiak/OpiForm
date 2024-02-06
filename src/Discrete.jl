@@ -170,7 +170,9 @@ function launch(params_in, store_path)
     @info "Saving data to disk @ $(params.store_path)"
     HDF5.h5open(joinpath(params.store_path, "data_discrete.h5"), "w") do fid
       fid["ops"] = hcat(store_ops...)
-      fid["adj_matrix"] = Matrix(params.adj_matrix)
+      if !params.full_adj_matrix
+        fid["adj_matrix"] = Matrix(params.adj_matrix)
+      end
     end
   end
 

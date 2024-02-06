@@ -312,7 +312,11 @@ end
 
 function load_hdf5_data(filename::String, key::String)
   data = HDF5.h5open(filename)
-  return read(data[key])
+  try
+    return read(data[key])
+  catch
+    return nothing
+  end
 end
 
 function plot_result(output_filename::String; meanfield_dir::Union{String,Nothing}=nothing, discrete_dir::Union{String,Nothing}=nothing)
@@ -362,14 +366,16 @@ function plot_results(output_filename::String;
 
     obs_g_k = nothing
     function get_g_k(dn, i)
-      return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$(i-1)")
+      try
+        return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$(i-1)")
+      catch
+        return nothing
+      end
     end
-    try
-      obs_g_k = map(dn -> (M.@lift get_g_k(dn, $obs_i)), meanfield_dirs)
-    catch
-      @error "Failed to load g"
-      obs_g_k = nothing
-    end
+
+    obs_g_k = map(dn -> (M.@lift get_g_k(dn, $obs_i)), meanfield_dirs)
+
+    full_g = isnothing(obs_g_k[1][])
 
     function build_x(N)
       δx = 2 / N
@@ -380,36 +386,45 @@ function plot_results(output_filename::String;
 
     x_a = map(build_x, N_a)
   end
+
   if has_d
     discrete_dir = discrete_dirs[1]
     ops = load_hdf5_data(joinpath(discrete_dir, "data_discrete.h5"), "ops")
     mean_ops = Statistics.mean(ops)
-    adj_matrix = SpA.sparse(load_hdf5_data(joinpath(discrete_dir, "data_discrete.h5"), "adj_matrix"))
+    adj_matrix_full = load_hdf5_data(joinpath(discrete_dir, "data_discrete.h5"), "adj_matrix")
+    adj_matrix = isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full)
     N_discrete = size(ops, 1)
-    adj_matrix_nnz = SpA.nnz(adj_matrix)
-  end
+    if !isnothing(adj_matrix)
+      adj_matrix_nnz = SpA.nnz(adj_matrix)
 
-  xs = Vector{Float64}(undef, adj_matrix_nnz)
-  ys = Vector{Float64}(undef, adj_matrix_nnz)
+      sharp_I = vec(sum(adj_matrix; dims=2))
+      ω_inf_d = sum(ops[:, 1] .* sharp_I) ./ sharp_I
+      xs = Vector{Float64}(undef, adj_matrix_nnz)
+      ys = Vector{Float64}(undef, adj_matrix_nnz)
 
-  function get_xy(opis)
-    rows = SpA.rowvals(adj_matrix)
-    got = 0
-    for j in 1:N_discrete
-      nzr = SpA.nzrange(adj_matrix, j)
-      nnz_in_col = length(nzr)
+      function get_xy(opis)
+        rows = SpA.rowvals(adj_matrix)
+        got = 0
+        for j in 1:N_discrete
+          nzr = SpA.nzrange(adj_matrix, j)
+          nnz_in_col = length(nzr)
 
-      xs[got+1:got+nnz_in_col] .= opis[rows[nzr]]
-      ys[got+1:got+nnz_in_col] .= opis[j]
+          xs[got+1:got+nnz_in_col] .= opis[rows[nzr]]
+          ys[got+1:got+nnz_in_col] .= opis[j]
 
-      got += nnz_in_col
+          got += nnz_in_col
+        end
+        @assert got == adj_matrix_nnz
+      end
+
+      get_xy(ops[:, 1])
+      obs_xs = M.Observable(xs)
+      obs_ys = M.Observable(xs)
+    else
+      ω_inf_d = sum(ops[:, 1]) / N_discrete
     end
-    @assert got == adj_matrix_nnz
   end
 
-  get_xy(ops)
-  obs_xs = M.Observable(xs)
-  obs_ys = M.Observable(xs)
 
   if has_mf && has_d
     max_iter = min(max_iter, size(ops, 2))
@@ -417,21 +432,39 @@ function plot_results(output_filename::String;
 
   set_makie_backend(:gl)
 
-  fig = M.Figure()
+  fig = M.Figure(size=(1024, 720))
   ax1 = M.Axis(fig[1:4, 1])
   ax1.title = "f / ω_i"
 
   ax2 = M.Axis(fig[1:4, 2])
   ax2.title = "f / ω_i"
 
-  ax3 = M.Axis(fig[6:9, 1])
-  ax3.title = "g"
+  if has_mf && !full_g
+    ax3 = M.Axis(fig[6:9, 1])
+    ax3.title = "g"
+  end
 
-  ax4 = M.Axis(fig[6:9, 2])
-  ax4.title = "adjacency matrix"
+  if has_d && !isnothing(adj_matrix)
+    ax4 = M.Axis(fig[6:9, 2])
+    ax4.title = "connections"
+  end
 
   g_bottom = fig[5, 1:2] = M.GridLayout()
 
+  if has_d
+    obs_ops = M.@lift ops[:, $obs_i]
+    obs_extrema_ops = M.@lift extrema($obs_ops)
+
+    M.hist!(ax1, obs_ops; bins=50, normalization=:pdf)
+    M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
+    M.hist!(ax2, obs_ops; bins=50, normalization=:pdf)
+    M.vlines!(ax2, ω_inf_d, color=:grey, ls=0.5)
+
+    if !isnothing(adj_matrix)
+      M.scatter!(ax4, obs_xs, obs_ys, alpha=0.2, markersize=4)
+      M.limits!(ax4, (-1, 1), (-1, 1))
+    end
+  end
 
   if has_mf
     obs_f_a = [M.@lift f_a[k][:, $obs_i] for k in 1:K_mf]
@@ -443,19 +476,20 @@ function plot_results(output_filename::String;
       left_x = [x_a[i][left_idc[i]] for i in 1:K_mf]
       right_x = [x_a[i][right_idc[i]] for i in 1:K_mf]
 
-      return (left=minimum(left_x), right=maximum(right_x))
+      if has_d
+        return (left=min(minimum(obs_ops[]), minimum(left_x)), right=max(maximum(obs_ops[]), maximum(right_x)))
+      else
+        return (left=minimum(left_x), right=maximum(right_x))
+      end
     end
 
     function find_max(f_a)
       return maximum(map(f -> maximum(f[]), f_a))
     end
 
-    # obs_support = M.@lift find_support($obs_f_a)
-
-    # obs_idx_left = M.@lift findfirst(x -> x > 1e-5, $obs_f)
-    # obs_idx_right = M.@lift findlast(x -> x > 1e-5, $obs_f)
-    # obs_f_left = M.@lift ((-1 + (!isnothing($obs_idx_left) ? $obs_idx_left : 1) - 1) * 2 / N)
-    # obs_f_right = M.@lift (-1 + (!isnothing($obs_idx_right) ? $obs_idx_right : N) * 2 / N)
+    if !full_g
+      obs_gff_a = [M.Observable(obs_f_a[k][]' .* obs_g_k[k][] .* obs_f_a[k][]) for k in 1:K_mf]
+    end
 
     for k in 1:K_mf
       M.lines!(ax1, x_a[k], obs_f_a[k], label=labels[k])
@@ -463,28 +497,14 @@ function plot_results(output_filename::String;
       #M.vspan!(ax2, -δx / 2, δx / 2, color=:grey, alpha=0.3)
       M.barplot!(ax2, x_a[k], obs_f_a[k], gap=0)
 
-      if !isnothing(obs_g_k)
-        o = obs_g_k[k]
-        M.heatmap!(ax3, x_a[k], x_a[k], o)
+      if !full_g
+        M.heatmap!(ax3, x_a[k], x_a[k], obs_gff_a[k])
         #M.heatmap!(ax3, x_a[k], x_a[k], M.@lift log10.(abs.($o)))
       end
     end
 
     legend = M.Legend(g_bottom[1, 1], ax1)
 
-  end
-
-  if has_d
-    obs_ops = M.@lift ops[:, $obs_i]
-    obs_extrema_ops = M.@lift extrema($obs_ops)
-
-    M.hist!(ax1, obs_ops; bins=50, normalization=:pdf)
-    M.vlines!(ax1, mean_ops, color=:grey, ls=0.5)
-    M.hist!(ax2, obs_ops; bins=50, normalization=:pdf)
-    M.vlines!(ax2, mean_ops, color=:grey, ls=0.5)
-
-    M.scatter!(ax4, obs_xs, obs_ys)
-    M.limits!(ax4, (-1, 1), (-1, 1))
   end
 
   i_range = 1:10:max_iter
@@ -506,9 +526,17 @@ function plot_results(output_filename::String;
       ax1.title = string(i)
     end
 
-    get_xy(obs_ops[])
-    obs_xs[] = xs
-    obs_ys[] = ys
+    if has_d && !isnothing(adj_matrix)
+      get_xy(obs_ops[])
+      obs_xs[] = xs
+      obs_ys[] = ys
+    end
+
+    if !full_g
+      for k in 1:K_mf
+        obs_gff_a[k][] = obs_f_a[k][]' .* obs_g_k[k][] .* obs_f_a[k][]
+      end
+    end
 
     if has_mf
       support = find_support(obs_f_a)

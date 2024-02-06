@@ -494,7 +494,7 @@ function launch(params_in, store_path)
   while i < params.max_iter
     i += 1
     if i % 10 == 0
-      print(" [i=$(lpad(i, 5, " "))]" * "\b"^100)
+      print("\b"^200 * "[i=$(lpad(i, 5, " "))]")
     end
     #if should_terminate
     #  if has_tty
@@ -616,15 +616,15 @@ function launch(params_in, store_path)
       push!(store_f, copy(f))
       if !params.full_g
         push!(store_g, (i, copy(g)))
-      end
-      if length(store_g) > 100
-        print("flushing g to disk")
-        HDF5.h5open(joinpath(params.store_path, "data_meanfield.h5"), "cw") do fid
-          for (i, g) in store_g
-            fid["g/$(i)"] = g
+        if length(store_g) > 100
+          # print(" - flushing g to disk\n")
+          HDF5.h5open(joinpath(params.store_path, "data_meanfield.h5"), "cw") do fid
+            for (i, g) in store_g
+              fid["g/$(i)"] = g
+            end
           end
+          empty!(store_g)
         end
-        empty!(store_g)
       end
     end
   end
@@ -637,8 +637,10 @@ function launch(params_in, store_path)
     @info "Saving data to disk @ $(params.store_path)"
     HDF5.h5open(joinpath(params.store_path, "data_meanfield.h5"), "cw") do fid
       fid["f"] = hcat(store_f...)
-      for (i, g) in store_g
-        fid["g/$(i)"] = g
+      if !params.full_g
+        for (i, g) in store_g
+          fid["g/$(i)"] = g
+        end
       end
     end
   end

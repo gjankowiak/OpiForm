@@ -24,14 +24,6 @@ function main(suffix)
   store_overwrite = false
 
   ### Model ###
-
-  # Average number of connections per individual,
-  # g_init will be normalized so that ∫g = connectivity.
-  # The number of non-zero entries in the adjacency matrix
-  # will be roughly N_discrete*connectivity, so the resulting density will
-  # be connectivity/N_discrete, i.e. connectivity should be less than N_discrete!
-  connectivity = N_discrete / 20
-
   # σ = 0.0 => Echo chambers only
   # σ = 1.0 => Epistemic bubbles only
   σ = 1.0
@@ -106,6 +98,19 @@ function main(suffix)
 
   #### g (connectivity discribution) ####
 
+  full_g = true
+  full_adj_matrix = full_g || false
+
+  # Average number of connections per individual,
+  # g_init will be normalized so that ∫g = connectivity.
+  # The number of non-zero entries in the adjacency matrix
+  # will be roughly N_discrete*connectivity, so the resulting density will
+  # be connectivity/N_discrete, i.e. connectivity should be less than N_discrete!
+
+  # if full_adj_matrix = true, the connectivity should be N_discrete
+  # if full_g = true, the connectivity should be ∫g = 4 ?!
+  connectivity = N_discrete / 5
+
   function g_init_func(x::Vector{Float64})
     ω, m = x
     stddev = 0.3
@@ -113,18 +118,14 @@ function main(suffix)
     return r
   end
 
-  g_init_func_scaled = OpiForm.scale_g_init(g_init_func, connectivity)
+  if !full_g
+    g_init_func_scaled = OpiForm.scale_g_init(g_init_func, connectivity)
+  else
+    g_init_func_scaled = nothing
+  end
 
   # if g_init is nothing, it will be evaluated from g_init_func_scaled
   g_init = nothing
-
-  # g_init = OpiForm.speyes(N, 3)
-  # g_init = ones(N,N)
-
-  # g_init = rand_symmetric(N, 0.1)
-
-  full_g = false
-  full_adj_matrix = false
 
   ### ops_init ###
   ops_init = OpiForm.sample_poly_dist(f_init_poly, N_discrete)

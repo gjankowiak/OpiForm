@@ -86,6 +86,11 @@ function scale_g_init(g_init_func, connectivity)
   return g_init_func_scaled
 end
 
+function compute_ω_inf_mf(g_init_func)
+  g_init_integral = Cubature.hcubature(g_init_func, [-1; -1], [1; 1])[1]
+  return Cubature.hcubature(x -> x[1] * g_init_func(x), [-1; -1], [1; 1])[1]
+end
+
 function sample_g_init(f_samples, g_init_func_scaled, connectivity; symmetric::Bool=true)
   N_discrete = length(f_samples)
 
@@ -441,7 +446,7 @@ function plot_results(output_filename::String;
 
   if has_mf && !full_g
     ax3 = M.Axis(fig[6:9, 1])
-    ax3.title = "g"
+    ax3.title = "f(ω) g(ω,m) f(m)"
   end
 
   if has_d && !isnothing(adj_matrix)

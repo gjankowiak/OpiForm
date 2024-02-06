@@ -130,8 +130,15 @@ function main(suffix)
   ops_init = OpiForm.sample_poly_dist(f_init_poly, N_discrete)
 
   ### adj_matrix ###
-  g_sampling_result = OpiForm.sample_g_init(ops_init, g_init_func_scaled, connectivity)
-  adj_matrix = g_sampling_result.A
+  if !full_adj_matrix
+    g_sampling_result = OpiForm.sample_g_init(ops_init, g_init_func_scaled, connectivity)
+    adj_matrix = g_sampling_result.A
+  else
+    adj_matrix = nothing
+  end
+
+
+  # @assert false "aborting"
 
   ### Solver ###
   # Choice of flux:

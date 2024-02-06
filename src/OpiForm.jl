@@ -243,17 +243,25 @@ function prepare(params, mode)
 
   @info Dates.now()
 
-  dirty = length(read(`git status -s -uno --porcelain`, String)) > 0
-  if dirty
-    @warn "Working tree is dirty!"
-    @warn read(`git status -uno`, String)
+  try
+    dirty = length(read(`git status -s -uno --porcelain`, String)) > 0
+    if dirty
+      @warn "Working tree is dirty!"
+      @warn read(`git status -uno`, String)
+    end
+  catch
+    @warn "git status failed"
   end
 
   if params.store
     open(joinpath(params.store_path, "metadata.txt"), "w") do meta
       write(meta, "Julia version: $VERSION\n")
-      write(meta, "Commit:")
-      write(meta, read(`git show -s --oneline`, String))
+      try
+        write(meta, "Commit:")
+        write(meta, read(`git show -s --oneline`, String))
+      catch
+        @warn "git show failed"
+      end
     end
     Serialization.serialize(joinpath(params.store_path, "params.dat"), params)
   end

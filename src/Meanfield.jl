@@ -265,7 +265,10 @@ end
 function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, g)
   # compute EB
 
+  # TODO: describe what is going on here
+
   if params.full_g
+    # g is normalized so that ∫g = connectivity
     η = 1 / (params.δx * params.N)
   else
     g_mass = params.δx * sum(g; dims=2)

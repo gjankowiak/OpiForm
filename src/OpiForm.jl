@@ -59,6 +59,22 @@ function get_makie_backend()
   return M
 end
 
+function find_support_width(f::Array{Float64,2}, x; tol::Float64=1e-5)
+  # If no element is larger than tol, we return 0, so that the choice of the value in
+  # the ternary operator (here, x[1]) is arbitrary
+  left_bound = col -> (idx = findfirst(x -> x > tol, col); return isnothing(idx) ? x[1] : x[idx])
+  right_bound = col -> (idx = findlast(x -> x > tol, col); return isnothing(idx) ? x[1] : x[idx])
+  return [right_bound(f[:, i]) - left_bound(f[:, i]) for i in axes(f, 2)]
+end
+
+function find_support_width(f_a::Vector{Array{Float64,2}}, x_a::Vector; tol::Float64=1e-5)
+  return map(i -> find_support_width(f_a[i], x_a[i]; tol=tol), eachindex(f_a))
+end
+
+function peak2peak(v; dims)
+  return vec(map(x -> x[2] - x[1], extrema(v; dims=dims)))
+end
+
 function sample_poly_dist(poly, n)
   # Samples a polynomial distribution
   I = Polynomials.integrate(poly)
@@ -97,9 +113,13 @@ function sample_g_init(f_samples, g_init_func_scaled, connectivity; symmetric::B
   @assert N_discrete > 0 "No samples provided!"
   @assert connectivity < N_discrete "Connectivity >= N_discrete!"
 
-  # Compute all the couples g_init(ω_i, ω_j)
-  # FIXME: use the symmetry to speed up the computation
-  g_init_samples = [i == j ? 0.0 : g_init_func_scaled(f_samples[i], f_samples[j]) for i = 1:N_discrete, j = 1:N_discrete]
+  if !isnothing(g_init_func_scaled)
+    # Compute all the couples g_init(ω_i, ω_j)
+    # FIXME: use the symmetry to speed up the computation
+    g_init_samples = [i == j ? 0.0 : g_init_func_scaled(f_samples[i], f_samples[j]) for i = 1:N_discrete, j = 1:N_discrete]
+  else
+    g_init_samples = [i == j ? 0.0 : connectivity / 4 for i = 1:N_discrete, j = 1:N_discrete]
+  end
   sum_g_samples = sum(g_init_samples)
 
   # integrate over the samples to get the corresponding connectivity
@@ -144,7 +164,7 @@ function sample_g_init(f_samples, g_init_func_scaled, connectivity; symmetric::B
         continue
       end
 
-      if rand() < g_init_func_scaled(f_samples[i], f_samples[j]) / sum_g_samples
+      if isnothing(g_init_func_scaled) || (rand() < g_init_func_scaled(f_samples[i], f_samples[j]) / sum_g_samples)
         A[i, j] = 1
         accepted += 1
         if symmetric
@@ -324,27 +344,16 @@ function load_hdf5_data(filename::String, key::String)
   end
 end
 
-function plot_result(output_filename::String; meanfield_dir::Union{String,Nothing}=nothing, discrete_dir::Union{String,Nothing}=nothing)
+function plot_result(output_filename::String; meanfield_dir::Union{String,Nothing}=nothing, discrete_dir::Union{String,Nothing}=nothing, kwargs...)
   mf_dirs = isnothing(meanfield_dir) ? String[] : [meanfield_dir]
   d_dirs = isnothing(discrete_dir) ? String[] : [discrete_dir]
-  return plot_results(output_filename; meanfield_dirs=mf_dirs, discrete_dirs=d_dirs)
+  return plot_results(output_filename; meanfield_dirs=mf_dirs, discrete_dirs=d_dirs, kwargs...)
 end
-
-#mutable struct GMatricesBuffer
-#  start_idx::Int64
-#  end_idx::Int64
-#  size::Int64
-#  g_a::Vector{Matrix{Float64}}
-#  hdf5_handle::HDF5.File
-#end
-#
-#function load(v::Array{String}, size::Int64)::GMatricesBuffer
-#
-#end
 
 function plot_results(output_filename::String;
   meanfield_dirs::Vector{String}=String[],
-  discrete_dirs::Vector{String}=String[])
+  discrete_dirs::Vector{String}=String[],
+  kwargs...)
 
   # check that the dirs actually exist
   @assert all(isdir, meanfield_dirs)
@@ -358,6 +367,12 @@ function plot_results(output_filename::String;
   if !(has_mf || has_d)
     @error "No dir provided"
     return
+  end
+
+
+  center_histogram = get(kwargs, :center_histogram, false)
+  if center_histogram
+    @warn "Centering histograms, plots are biased!"
   end
 
   obs_i = M.Observable(1)
@@ -400,6 +415,8 @@ function plot_results(output_filename::String;
     adj_matrix = isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full)
     N_discrete = size(ops, 1)
     if !isnothing(adj_matrix)
+      @assert SpA.is_hermsym(adj_matrix, identity)
+
       adj_matrix_nnz = SpA.nnz(adj_matrix)
 
       sharp_I = vec(sum(adj_matrix; dims=2))
@@ -418,6 +435,10 @@ function plot_results(output_filename::String;
           ys[got+1:got+nnz_in_col] .= opis[j]
 
           got += nnz_in_col
+        end
+        if center_histogram
+          xs .-= ω_inf_d
+          ys .-= ω_inf_d
         end
         @assert got == adj_matrix_nnz
       end
@@ -457,7 +478,11 @@ function plot_results(output_filename::String;
   g_bottom = fig[5, 1:2] = M.GridLayout()
 
   if has_d
-    obs_ops = M.@lift ops[:, $obs_i]
+    if center_histogram
+      obs_ops = M.@lift (ops[:, $obs_i] .- ω_inf_d)
+    else
+      obs_ops = M.@lift ops[:, $obs_i]
+    end
     obs_extrema_ops = M.@lift extrema($obs_ops)
 
     M.hist!(ax1, obs_ops; bins=50, normalization=:pdf)
@@ -561,6 +586,91 @@ function plot_results(output_filename::String;
   @info ("movie saved at $output_filename")
 
   println()
+
+end
+
+function compare_peak2peak(
+  meanfield_dir::String,
+  discrete_dir::String,
+)
+  return compare_peak2peak([meanfield_dir], [discrete_dir])
+end
+
+function compare_peak2peak(
+  meanfield_dirs::Vector{String},
+  discrete_dirs::Vector{String},
+)
+
+  # check that the dirs actually exist
+  @assert all(isdir, meanfield_dirs)
+  @assert all(isdir, discrete_dirs)
+
+  K_mf, K_d = length(meanfield_dirs), length(discrete_dirs)
+
+  if K_mf == 0 && K_d == 0
+    @error "No dir provided"
+    return
+  end
+
+  if K_mf > 0
+    labels_mf = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
+
+    N_a = map(f -> size(f, 1), f_a)
+    max_iter = minimum(map(f -> size(f, 2), f_a))
+
+    function build_x(N)
+      δx = 2 / N
+      x_l, x_r = -1 + 0.5δx, 1 - 0.5δx
+
+      return range(x_l, x_r, length=N)
+    end
+
+    x_a = map(build_x, N_a)
+
+    p2p_mf_a = find_support_width(f_a, x_a)
+  end
+
+  if K_d > 0
+    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), discrete_dirs)
+    ops_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "ops"), discrete_dirs)
+
+    adj_matrix_full_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "adj_matrix"), discrete_dirs)
+    adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+    N_discrete_a = map(ops -> size(ops, 1), ops_a)
+
+    ω_inf_d_a = zeros(K_d)
+    p2p_d_a = [peak2peak(ops; dims=1) for ops in ops_a]
+
+    for (i, adj_matrix) in enumerate(adj_matrix_a)
+      if !isnothing(adj_matrix)
+        adj_matrix_nnz = SpA.nnz(adj_matrix)
+
+        sharp_I = vec(sum(adj_matrix; dims=2))
+        ω_inf_d_a[i] = sum(ops_a[i][:, 1] .* sharp_I) ./ N_discrete_a[i]
+      else
+        ω_inf_d_a[i] = sum(ops_a[i][:, 1]) / N_discrete_a[i]
+      end
+      max_iter = min(max_iter, size(ops_a[i], 2))
+    end
+  end
+
+  set_makie_backend(:gl)
+
+  fig = M.Figure(size=(1024, 720))
+  ax1 = M.Axis(fig[1, 1], yscale=log10)
+
+  for (i, p2p) in enumerate(p2p_d_a)
+    M.lines!(ax1, 2:max_iter, p2p[2:end], label=labels_d[i])
+  end
+
+  for (i, p2p) in enumerate(p2p_mf_a)
+    M.lines!(ax1, 1:max_iter, p2p, label=labels_mf[i])
+  end
+
+  M.axislegend()
+
+  display(fig)
 
 end
 

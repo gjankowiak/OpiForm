@@ -134,7 +134,7 @@ function launch(params_in, store_path)
   inc = zeros(params.N_discrete, 3)
 
   if params.store
-    store_ops = [ops]
+    store_ops = [copy(ops)]
   end
 
   factors = [params.σ; 1 - params.σ; 1 - params.σ]

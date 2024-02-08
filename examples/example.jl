@@ -163,6 +163,10 @@ function main(suffix)
     _α = (x) -> 1.0
   end
 
+  ###########################################################################################################
+  #                        YOU PROBABLY SHOULD TOUCH THE BLOCK BELOW                                        #
+  ###########################################################################################################
+
   # DEFINITION G
   g_init_unscaled_uni = (x -> 0.5 * N_discrete * _α(x) * f_init_func(x[1]) * f_init_func(x[2]))
   g_prefactor = OpiForm.scale_g_init(g_init_unscaled_uni, connection_density * N_discrete)
@@ -178,7 +182,6 @@ function main(suffix)
   g_init = nothing
 
   ### ops_init ###
-  # FIXME:
   ops_init = OpiForm.sample_poly_dist(f_init_poly, N_discrete)
 
   ### adj_matrix ###
@@ -188,9 +191,11 @@ function main(suffix)
   else
     adj_matrix = nothing
   end
+  #
+  ###########################################################################################################
+  #                                                                                                         #
+  ###########################################################################################################
 
-
-  # @assert false "aborting"
 
   ### Solver ###
   # Choice of flux:

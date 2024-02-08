@@ -337,6 +337,8 @@ end
 
 function launch(params_in, store_path)
 
+  @assert !params_in.full_g "Parameter full_g is deprecated, it should be false"
+
   prepare(merge(params_in, (store_path=store_path,)), :meanfield)
 
   # Domain parameters

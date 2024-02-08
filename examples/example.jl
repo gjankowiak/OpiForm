@@ -12,7 +12,7 @@ function main(suffix)
   N = 301
   N_discrete = 200
   δt = 1e-3
-  max_iter = 10000
+  max_iter = 20000
 
   ### Visualization ###
   plot_scale = identity
@@ -46,6 +46,7 @@ function main(suffix)
 
   ## Debate kernel (for epistemic bubbles)
   D_kern_factor = 1.0
+  # D_kern = (ω, m) -> -D_kern_factor * exp(-abs(ω - m)) * sign(ω - m)
   function D_func(distance)
     return -D_kern_factor * distance
   end
@@ -73,66 +74,116 @@ function main(suffix)
 
   ### Initial conditions ###
 
-  #### f_init will be normalized ####
+  #### f_init_func NEEDS TO BE NORMALIZED ####
 
   PP = Polynomials.Polynomial
 
   # centered bump
   # f_init_poly = PP([1.0, -1.0]) * PP([1, 1])
+  # @show f_init_poly
+
+  # side bump
+  #f_init_poly = 0
+  #function f_init_func(x)
+  #  return x < 0.0 ? 1 - 4 * (x + 0.5)^2 : 0.0
+  #end
 
   # symmetric bumps (chebyshev)
-  n_bumps = 2
-  chebyshev_coeffs = zeros(n_bumps * 2 + 1)
-  chebyshev_coeffs[end] = 1
-  f_init_poly = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+  # n_bumps = 2
+  # chebyshev_coeffs = zeros(n_bumps * 2 + 1)
+  # chebyshev_coeffs[end] = 1
+  # f_init_poly = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+
+  # function f_init_func(x)
+  #   return f_init_poly(x)
+  # end
+
 
   # asymmetric bumps (chebyshev)
   # n_bumps = 3
   # chebyshev_coeffs = zeros(n_bumps * 2)
   # chebyshev_coeffs[end] = 1
-  # f_init_func = x -> 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)(x)
+  # f_init_poly = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+
+  # more asymmetric bumps (chebyshev)
+  n_bumps = 3
+  chebyshev_coeffs = zeros(n_bumps * 2)
+  chebyshev_coeffs[1] = -1
+  chebyshev_coeffs[2] = 1
+  chebyshev_coeffs[end] = 1
+
+  f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+  f_init_poly = OpiForm.scale_poly(f_init_poly_unscaled)
 
   function f_init_func(x)
     return f_init_poly(x)
   end
 
-  #### g (connectivity discribution) ####
+  # Cosine
+  # f_init_func = x -> 0.3 * (1e-3 + cos(2 * π * x))
+  # f_init_func = x -> 0.3 * (1e-3 + cos(π * x / 2))
+  # f_init_func = x -> 0.3 * (1 + 1e-3 - cos(π * x / 2))
 
-  full_g = true
-  full_adj_matrix = full_g || false
+  # Constant
+  #f_init_poly = Polynomials.Polynomial([0.5])
+  #f_init_func = x -> 0.5
 
-  # Average number of connections per individual,
-  # g_init will be normalized so that ∫g = connectivity.
+  # Linear
+  # f_init_func = x -> 1.0 + 0.3 * x
+
+  # Step
+  # f_init_func = x -> (2 + round(2 * x)) * (x < 0)
+
+  #### α (connectivity discribution) ####
+
+  full_α = false
+  full_adj_matrix = false
+
+  # Density of the connections
+  # g_init will be normalized so that
+  # ∫g = λ (see the overleaf file),
+  #    = N_discete * connection_density.
   # The number of non-zero entries in the adjacency matrix
-  # will be roughly N_discrete*connectivity, so the resulting density will
-  # be connectivity/N_discrete, i.e. connectivity should be less than N_discrete!
+  # will be roughly N_discrete^2*connection_density, so the resulting density will
+  # be connection_density, i.e. connection_density should be less than 1!
 
-  # if full_adj_matrix = true, the connectivity should be N_discrete
-  # if full_g = true, the connectivity should be ∫g = 4 ?!
-  connectivity = N_discrete / 5
+  connection_density = 0.1
+  @assert connection_density < 1
 
-  function g_init_func(x::Vector{Float64})
+  function α_init_func(x::Vector{Float64})
     ω, m = x
     stddev = 0.3
     r = exp(-(ω - m)^2 / stddev^2) + 0.1
     return r
   end
 
-  if !full_g
-    g_init_func_scaled = OpiForm.scale_g_init(g_init_func, connectivity)
+  if !full_α
+    _α = α_init_func
   else
-    g_init_func_scaled = nothing
+    _α = (x) -> 1.0
   end
+
+  # DEFINITION G
+  g_init_unscaled_uni = (x -> 0.5 * N_discrete * _α(x) * f_init_func(x[1]) * f_init_func(x[2]))
+  g_prefactor = OpiForm.scale_g_init(g_init_unscaled_uni, connection_density * N_discrete)
+  α_init_func_scaled = (ω, m) -> g_prefactor * _α([ω, m])
+  # DEFINITION_G
+  g_init_func_scaled = (ω, m) -> 0.5 * N_discrete * α_init_func_scaled(ω, m) * f_init_func(ω) * f_init_func(m)
+
+  @show g_init_func_scaled
+
+  ω_inf_mf_init = OpiForm.compute_ω_inf_mf(g_init_func_scaled, connection_density * N_discrete)
 
   # if g_init is nothing, it will be evaluated from g_init_func_scaled
   g_init = nothing
 
   ### ops_init ###
+  # FIXME:
   ops_init = OpiForm.sample_poly_dist(f_init_poly, N_discrete)
 
   ### adj_matrix ###
   if !full_adj_matrix
-    g_sampling_result = OpiForm.sample_g_init(ops_init, g_init_func_scaled, connectivity)
+    g_sampling_result = OpiForm.sample_g_init(ops_init, f_init_func, α_init_func_scaled, connection_density, full_α)
     adj_matrix = g_sampling_result.A
   else
     adj_matrix = nothing
@@ -206,7 +257,7 @@ function main(suffix)
     P_kern=P_kern,
 
     # bubble-chamber balance parameter
-    connectivity=connectivity,
+    connection_density=connection_density,
     σ=σ,
     EC_ρ=EC_ρ,
     EC_type=EC_type,
@@ -223,7 +274,9 @@ function main(suffix)
     ### g
     g_init_func_scaled=g_init_func_scaled,
     g_init=g_init,
-    full_g=full_g, # if true, then g = 1 (modulo normalization). Overrides g_init.
+    full_α=full_α, # if true, then g = 1 (modulo normalization). Overrides g_init.
+    full_g=false, # legacy parameter, unused, should be false
+    ω_inf_mf_init=ω_inf_mf_init,
 
     ### Discrete model
     full_adj_matrix=full_adj_matrix,
@@ -256,15 +309,40 @@ function main(suffix)
   OpiForm.set_makie_backend(:gl)
 
   params_lLF = merge(params, (flux=:lLF,))
-  store_path = "results/test_meanfield_lLF" * suffix
+  store_path = "results/test_meanfield_lLF_" * suffix
   OpiForm.MeanField.launch(params_lLF, store_path)
 
-  store_path = "results/test_discrete" * suffix
+  store_path = "results/test_discrete_" * suffix
   OpiForm.Discrete.launch(params, store_path)
 
 end
 
-suffix = "_sampling_g0"
+suffix = "_omega_inf_c=0.1"
+
+#########################
+#          RUN          #
+#########################
+
 main(suffix)
 
-OpiForm.plot_result("test_sampling_g0.mp4", meanfield_dir="results/test_meanfield_lLF" * suffix, discrete_dir="results/test_discrete" * suffix)
+#########################
+#         PLOT          #
+#########################
+
+# OpiForm.plot_result("test_$(suffix).mp4";
+#   meanfield_dir="results/test_meanfield_lLF_" * suffix,
+#   discrete_dir="results/test_discrete_" * suffix,
+#   center_histogram=false)
+
+OpiForm.compare_peak2peak(
+  "results/test_meanfield_lLF_" * suffix,
+  "results/test_discrete_" * suffix,
+)
+#
+# OpiForm.compare_peak2peak(
+#   ["results/test_meanfield_lLF_" * suffix],
+#   ["results/test_discrete_" * suffix_old, "results/test_discrete_" * suffix]
+# )
+
+#OpiForm.plot_result("results/test_meanfield" * suffix, meanfield_dir="results/test_meanfield" * suffix)
+#OpiForm.plot_result(meanfield_dir="results/test_meanfield" * suffix, discrete_dir="results/test_discrete" * suffix)

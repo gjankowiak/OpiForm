@@ -8,6 +8,8 @@ import LoggingExtras
 import BenchmarkTools
 import StatsBase
 
+import TOML
+
 import Graphs
 
 import Polynomials
@@ -59,20 +61,25 @@ function get_makie_backend()
   return M
 end
 
-function find_support_width(f::Array{Float64,2}, x; tol::Float64=1e-5)
+function find_support_bounds(f::Array{Float64,2}, x; tol::Float64=1e-5)
   # If no element is larger than tol, we return 0, so that the choice of the value in
   # the ternary operator (here, x[1]) is arbitrary
   left_bound = col -> (idx = findfirst(x -> x > tol, col); return isnothing(idx) ? x[1] : x[idx])
   right_bound = col -> (idx = findlast(x -> x > tol, col); return isnothing(idx) ? x[1] : x[idx])
-  return [right_bound(f[:, i]) - left_bound(f[:, i]) for i in axes(f, 2)]
+  return [(left_bound(f[:, i]), right_bound(f[:, i])) for i in axes(f, 2)]
 end
 
-function find_support_width(f_a::Vector{Array{Float64,2}}, x_a::Vector; tol::Float64=1e-5)
-  return map(i -> find_support_width(f_a[i], x_a[i]; tol=tol), eachindex(f_a))
+function find_support_bounds(f_a::Vector{Array{Float64,2}}, x_a::Vector; tol::Float64=1e-5)
+  return map(i -> find_support_bounds(f_a[i], x_a[i]; tol=tol), eachindex(f_a))
 end
 
 function peak2peak(v; dims)
   return vec(map(x -> x[2] - x[1], extrema(v; dims=dims)))
+end
+
+function scale_poly(poly)
+  I = Polynomials.integrate(poly)
+  return poly / (I(1) - I(-1))
 end
 
 function sample_poly_dist(poly, n)
@@ -90,36 +97,39 @@ function sample_poly_dist(poly, n)
   return samples
 end
 
-function scale_g_init(g_init_func, connectivity)
-  # Start by normalizing the input distribution
-  # so that the connectivity parameter is matched
-  g_init_integral = Cubature.hcubature(g_init_func, [-1; -1], [1; 1])[1]
+function scale_g_init(g_init_func_unscaled, target_g_integral)
+  g_init_unscaled_integral = Cubature.hcubature(g_init_func_unscaled, [-1; -1], [1; 1])[1]
+  return target_g_integral / g_init_unscaled_integral
+end
 
-  function g_init_func_scaled(ω, m)
-    return g_init_func([ω; m]) / g_init_integral * connectivity
+function compute_ω_inf_mf(g_init_func_scaled, g_init_integral)
+  if isnothing(g_init_func_scaled)
+    return 0.0
+  else
+    return (Cubature.hcubature(x -> x[1] * g_init_func_scaled(x[1], x[2]), [-1; -1], [1; 1])[1]) / g_init_integral
   end
-
-  return g_init_func_scaled
 end
 
-function compute_ω_inf_mf(g_init_func)
-  g_init_integral = Cubature.hcubature(g_init_func, [-1; -1], [1; 1])[1]
-  return Cubature.hcubature(x -> x[1] * g_init_func(x), [-1; -1], [1; 1])[1]
-end
-
-function sample_g_init(f_samples, g_init_func_scaled, connectivity; symmetric::Bool=true)
+function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, connection_density, full_α::Bool; symmetric::Bool=true)
   N_discrete = length(f_samples)
+  g_init_integral = connection_density * N_discrete
 
   @assert N_discrete > 0 "No samples provided!"
-  @assert connectivity < N_discrete "Connectivity >= N_discrete!"
+  @assert connection_density < 1 "connection_density >= 1!"
 
-  if !isnothing(g_init_func_scaled)
+  if !full_α
     # Compute all the couples g_init(ω_i, ω_j)
     # FIXME: use the symmetry to speed up the computation
-    g_init_samples = [i == j ? 0.0 : g_init_func_scaled(f_samples[i], f_samples[j]) for i = 1:N_discrete, j = 1:N_discrete]
+    α_init_samples = [i == j ? 0.0 : α_init_func_scaled(f_samples[i], f_samples[j]) for i = 1:N_discrete, j = 1:N_discrete]
   else
-    g_init_samples = [i == j ? 0.0 : connectivity / 4 for i = 1:N_discrete, j = 1:N_discrete]
+    α_init_samples = [i == j ? 0.0 : g_init_integral / 4 for i = 1:N_discrete, j = 1:N_discrete]
   end
+
+  # DEFINITION G
+  f_ops_samples = f_init_func_scaled.(f_samples)
+  g_init_samples = 0.5 * N_discrete * f_ops_samples .* α_init_samples .* f_ops_samples'
+
+  sum_α_samples = sum(α_init_samples)
   sum_g_samples = sum(g_init_samples)
 
   # integrate over the samples to get the corresponding connectivity
@@ -130,7 +140,7 @@ function sample_g_init(f_samples, g_init_func_scaled, connectivity; symmetric::B
   # this should only be expected to match if f_init is a constant distribution
   # i.e. the samples in the opinion spaces are uniformly distributed
   @info "Connectivities ∫g (match expected if f_init is constant):"
-  @info "from parameter               : $connectivity"
+  @info "from parameter               : $(connection_density * N_discrete)"
   @info "from discretization of g_init: $discrete_connectivity"
 
   # Sampling the adjacency matrix A
@@ -139,7 +149,7 @@ function sample_g_init(f_samples, g_init_func_scaled, connectivity; symmetric::B
   A = SpA.spzeros(Int, (N_discrete, N_discrete))
 
   # Number of non-zero entries in the adjea
-  N_entries = round(Int, N_discrete * connectivity)
+  N_entries = round(Int, N_discrete^2 * connection_density)
   # check that we are not trying to find to many (more than the size of the matrix)
   @assert (N_entries <= N_discrete * (N_discrete - 1)) "Trying to get $(N_entries) entries, only $(N_discrete*(N_discrete-1)) available!"
   @info "Sampling $(N_entries) entries from g_init (max: $(N_discrete*(N_discrete-1)))"
@@ -164,7 +174,7 @@ function sample_g_init(f_samples, g_init_func_scaled, connectivity; symmetric::B
         continue
       end
 
-      if isnothing(g_init_func_scaled) || (rand() < g_init_func_scaled(f_samples[i], f_samples[j]) / sum_g_samples)
+      if full_α || (rand() < α_init_func_scaled(f_samples[i], f_samples[j]) / sum_α_samples)
         A[i, j] = 1
         accepted += 1
         if symmetric
@@ -182,19 +192,23 @@ function sample_g_init(f_samples, g_init_func_scaled, connectivity; symmetric::B
   end
 
   # compute the discrepency between A and the #I_i
-  sharp_I = N_discrete * sum(g_init_samples; dims=2) * s
+  sharp_I = N_discrete * sum(α_init_samples; dims=2) * s
   discrepency = sum(A; dims=2) - sharp_I
 
-  @info "Theoretical sparsity: $(connectivity/N_discrete)"
+  @info "Theoretical sparsity: $(connection_density)"
   @info "     Actual sparsity: $(SpA.nnz(A)/N_discrete/N_discrete)"
 
-  @info "Discrepency Σ_j A_ij - #I_i (connectivity=$connectivity):"
+  @info "Discrepency Σ_j A_ij - #I_i (connection_density=$connection_density):"
   @info "\n" * string(UnicodePlots.histogram(discrepency; nbins=50, vertical=true))
 
-  @info "Heat map, g_init(ω_i, ω_j):"
-  println(UnicodePlots.heatmap(g_init_samples; width=80, height=80))
+  @info "Heat map, α_init(ω_i, ω_j):"
+  println(UnicodePlots.heatmap(α_init_samples; width=80, height=80))
 
   @info "Adjacency matrix:\n" * string(UnicodePlots.spy(reverse(A; dims=1); width=80, height=30))
+
+  @info "Heat map, g_init(ω_i, ω_j):"
+  @show extrema(g_init_samples)
+  println(UnicodePlots.heatmap(g_init_samples; width=80, height=80))
 
   if !Graphs.is_connected(Graphs.SimpleGraph(A))
     @warn "The adjacency matrix is not connected!"
@@ -279,15 +293,23 @@ function prepare(params, mode)
   end
 
   if params.store
-    open(joinpath(params.store_path, "metadata.txt"), "w") do meta
-      write(meta, "Julia version: $VERSION\n")
-      try
-        write(meta, "Commit:")
-        write(meta, read(`git show -s --oneline`, String))
-      catch
-        @warn "git show failed"
-      end
+    meta = Dict(
+      "julia_version" => string(VERSION),
+      "omega_inf_mf" => params.ω_inf_mf_init,
+      "connection_density" => params.connection_density,
+      "N_discrete" => params.N_discrete
+    )
+    try
+      meta["commit"] = read(`git show -s --oneline`, String)
+    catch
+      meta["commit"] = "failed"
+      @warn "git show failed"
     end
+
+    open(joinpath(params.store_path, "metadata.toml"), "w") do metafile
+      TOML.print(metafile, meta)
+    end
+
     Serialization.serialize(joinpath(params.store_path, "params.dat"), params)
   end
 
@@ -420,7 +442,7 @@ function plot_results(output_filename::String;
       adj_matrix_nnz = SpA.nnz(adj_matrix)
 
       sharp_I = vec(sum(adj_matrix; dims=2))
-      ω_inf_d = sum(ops[:, 1] .* sharp_I) ./ sharp_I
+      ω_inf_d = sum(ops[:, 1] .* sharp_I) ./ sum(sharp_I)
       xs = Vector{Float64}(undef, adj_matrix_nnz)
       ys = Vector{Float64}(undef, adj_matrix_nnz)
 
@@ -467,7 +489,7 @@ function plot_results(output_filename::String;
 
   if has_mf && !full_g
     ax3 = M.Axis(fig[6:9, 1])
-    ax3.title = "f(ω) g(ω,m) f(m)"
+    ax3.title = "g(ω,m)"
   end
 
   if has_d && !isnothing(adj_matrix)
@@ -575,10 +597,19 @@ function plot_results(output_filename::String;
       M.xlims!(ax1, low=support.left, high=support.right)
       M.xlims!(ax2, low=support.left, high=support.right)
       M.ylims!(ax2, low=-1, high=1.3 * max_f)
+
+      M.xlims!(ax3, low=support.left, high=support.right)
+      M.ylims!(ax3, low=support.left, high=support.right)
+
     else
       M.autolimits!(ax1)
       M.autolimits!(ax2)
       M.xlims!(ax2, low=obs_extrema_ops[][:left], high=obs_extrema_ops[][:right])
+    end
+
+    if has_d && !isnothing(adj_matrix)
+      M.xlims!(ax4, low=support.left, high=support.right)
+      M.ylims!(ax4, low=support.left, high=support.right)
     end
   end
 
@@ -587,6 +618,12 @@ function plot_results(output_filename::String;
 
   println()
 
+end
+
+function get_ω_inf_mf(dir::String)
+  p = joinpath(dir, "metadata.toml")
+  r = TOML.parsefile(p)["omega_inf_mf"]
+  return r
 end
 
 function compare_peak2peak(
@@ -628,7 +665,33 @@ function compare_peak2peak(
 
     x_a = map(build_x, N_a)
 
-    p2p_mf_a = find_support_width(f_a, x_a)
+    ω_inf_mf_init_a = map(dn -> get_ω_inf_mf(dn), meanfield_dirs)
+
+    support_bounds_mf_a = find_support_bounds(f_a, x_a)
+    support_width_mf_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mf_a]
+
+    ω_inf_mf_a = [zeros(max_iter) for i in 1:K_mf]
+
+    function get_g_i(dn, k)
+      try
+        return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$(k-1)")
+      catch
+        return nothing
+      end
+    end
+
+    function compute_weighted_avgs(k)
+      dn = meanfield_dirs[k]
+      ω_inf_mf = zeros(max_iter)
+      for i = 1:max_iter
+        g = get_g_i(dn, i)
+        ω_inf_mf[i] = sum(g .* x_a[k]) / sum(g)
+      end
+      return ω_inf_mf
+    end
+
+    ω_inf_mf_a = [compute_weighted_avgs(k) for k in eachindex(meanfield_dirs)]
+
   end
 
   if K_d > 0
@@ -639,36 +702,53 @@ function compare_peak2peak(
     adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
     N_discrete_a = map(ops -> size(ops, 1), ops_a)
 
-    ω_inf_d_a = zeros(K_d)
-    p2p_d_a = [peak2peak(ops; dims=1) for ops in ops_a]
+    function compute_weighted_avg(i)
+      adj_matrix = adj_matrix_a[i]
+      ops = ops_a[i]
+      N_discrete = N_discrete_a[i]
 
-    for (i, adj_matrix) in enumerate(adj_matrix_a)
       if !isnothing(adj_matrix)
-        adj_matrix_nnz = SpA.nnz(adj_matrix)
-
         sharp_I = vec(sum(adj_matrix; dims=2))
-        ω_inf_d_a[i] = sum(ops_a[i][:, 1] .* sharp_I) ./ N_discrete_a[i]
+        n_connections = sum(sharp_I)
+
+        return [sum(ops[:, k] .* sharp_I) ./ n_connections for k in axes(ops, 2)]
       else
-        ω_inf_d_a[i] = sum(ops_a[i][:, 1]) / N_discrete_a[i]
+        return [sum(ops[:, k]) / (N_discrete - 1) for k in axes(ops, 2)]
       end
-      max_iter = min(max_iter, size(ops_a[i], 2))
     end
+
+    ω_inf_d_a = [compute_weighted_avg(i) for i in 1:K_d]
+    p2p_d_a = [peak2peak(ops; dims=1) for ops in ops_a]
+    extrema_d_a = [extrema(ops; dims=1) for ops in ops_a]
+
+    max_iter = reduce((m, ops) -> min(m, size(ops, 2)), ops_a; init=max_iter)
   end
 
   set_makie_backend(:gl)
 
   fig = M.Figure(size=(1024, 720))
-  ax1 = M.Axis(fig[1, 1], yscale=log10)
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="iterations", title=M.L"\max_i\;\omega_i - \min_i\;\omega_i")
+  ax2 = M.Axis(fig[1, 2], xlabel="iterations", title=M.L"\omega_\inf \quad \min_i\; \omega_i \quad \max_i\; \omega_i")
 
-  for (i, p2p) in enumerate(p2p_d_a)
-    M.lines!(ax1, 2:max_iter, p2p[2:end], label=labels_d[i])
+  for i in eachindex(p2p_d_a)
+    r = 2:max_iter
+    p2p = p2p_d_a[i]
+    M.lines!(ax1, r, p2p[2:end], label=labels_d[i])
+
+    M.lines!(ax2, r, ω_inf_d_a[i][r], label=labels_d[i])
+    M.band!(ax2, r, map(v -> v[1], extrema_d_a[i][r]), map(v -> v[2], extrema_d_a[i][r]), alpha=0.2)
   end
 
-  for (i, p2p) in enumerate(p2p_mf_a)
+  for i in eachindex(support_width_mf_a)
+    p2p = support_width_mf_a[i]
     M.lines!(ax1, 1:max_iter, p2p, label=labels_mf[i])
+
+    M.hlines!(ax2, ω_inf_mf_init_a[i])
+    M.lines!(ax2, 1:max_iter, ω_inf_mf_a[i][1:max_iter])
+    M.band!(ax2, 1:max_iter, map(v -> v[1], support_bounds_mf_a[i]), map(v -> v[2], support_bounds_mf_a[i]), alpha=0.2)
   end
 
-  M.axislegend()
+  #M.axislegend()
 
   display(fig)
 

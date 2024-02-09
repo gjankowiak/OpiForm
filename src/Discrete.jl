@@ -134,6 +134,7 @@ function launch(params_in, store_path)
   inc = zeros(params.N_discrete, 3)
 
   if params.store
+    store_i = [0]
     store_ops = [copy(ops)]
   end
 
@@ -158,7 +159,8 @@ function launch(params_in, store_path)
 
     ops .= clamp.(ops .- params.δt * vec(inc * factors), -1, 1)
 
-    if params.store
+    if params.store && i % params.store_every_iter == 0
+      push!(store_i, i)
       push!(store_ops, copy(ops))
     end
 
@@ -169,6 +171,7 @@ function launch(params_in, store_path)
   if params.store
     @info "Saving data to disk @ $(params.store_path)"
     HDF5.h5open(joinpath(params.store_path, "data_discrete.h5"), "w") do fid
+      fid["i"] = store_i
       fid["ops"] = hcat(store_ops...)
       if !params.full_adj_matrix
         fid["adj_matrix"] = Matrix(params.adj_matrix)

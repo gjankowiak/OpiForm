@@ -85,7 +85,7 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
               (f_l .>= f) .* max.(a .* f, a_l .* f_l))
     flux_r = ((f .< f_r) .* min.(a_r .* f_r, a .* f) .+
               (f .>= f_r) .* max.(a_r .* f_r, a .* f))
-  elseif params.flux == :full_godunov
+  elseif params.flux == :constant_godunov
     # wave speed
     s_l = (f .* a .- f_l .* a_l) ./ (f .- f_l)
     s_r = (f_r .* a_r .- f .* a) ./ (f_r .- f)
@@ -219,6 +219,10 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
     if params.approx_a_prime
       throw("not implemented")
 
+      # for f
+      # max_C_l = maximum(abs, [a + a_prime .* f a_l + a_prime_l .* f_l], dims=2)
+      # max_C_r = maximum(abs, [a + a_prime .* f a_r + a_prime_r .* f_r], dims=2)
+
       max_C_l = maximum(abs, [
           a+a_prime.*g a_l+a_prime_l.*g_lω a_l+a_prime_l.*g_lm
         ], dims=2)
@@ -264,12 +268,14 @@ end
 
 function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, g)
   # compute EB
+  #
+  # g is normalized so that ∫∫g = connection_density*N_discrete
+  # η(ω,m) = g(ω,m) / ∫ g(ω,m') dm'
 
-  # TODO: describe what is going on here
-
-  if params.full_g
-    # g is normalized so that ∫g = connectivity
-    η = 1 / (params.δx * params.N)
+  if params.constant_g
+    # if g is constant,  g = connection_density*N_discrete / (params.Ω_width)²
+    # η(ω,m) = 1 / params.Ω_width
+    η = 1 / (params.Ω_width)
   else
     g_mass = params.δx * sum(g; dims=2)
     g_mass_inv = 1 ./ g_mass
@@ -337,7 +343,9 @@ end
 
 function launch(params_in, store_path)
 
-  @assert !params_in.full_g "Parameter full_g is deprecated, it should be false"
+  if params_in.constant_g
+    @warn "Parameter constant_g is deprecated!"
+  end
 
   prepare(merge(params_in, (store_path=store_path,)), :meanfield)
 
@@ -427,7 +435,7 @@ function launch(params_in, store_path)
 
 
   f = copy(f_init)
-  if !params.full_g
+  if !params.constant_g
     if isnothing(params_in.g_init)
       g = [params_in.g_init_func_scaled(xi, xj) for xi in x, xj in x]
       @assert size(g) == (params.N, params.N)
@@ -440,14 +448,18 @@ function launch(params_in, store_path)
 
   i = 0
 
+  α_init = [params_in.α_init_func_scaled(x[i], x[j]) for i in 1:N, j in 1:N]
+
   if params.store
     if !isdir(params.store_path)
       throw("Directory $(params.store_path) does not exist!")
     end
     store_i = [i]
     store_f = [f_init]
-    if !params.full_g
+    store_fαf_M1 = [sum(x .* f_init .* α_init .* f_init') / sum(f_init .* α_init .* f_init')]
+    if !params.constant_g
       store_g = [(0, copy(g))]
+      store_g_M1 = [sum(x .* g) / sum(g)]
     end
   end
 
@@ -459,7 +471,7 @@ function launch(params_in, store_path)
   µ, µC = zeros(params.N), zeros(params.N)
 
   df = zeros(params.N)
-  if !params.full_g
+  if !params.constant_g
     dg = zeros(params.N, params.N)
   end
 
@@ -482,41 +494,10 @@ function launch(params_in, store_path)
   end
 
 
-  has_tty = false
-  input_task = Task(nothing)
-
-  try
-    Base.run(`stty -icanon`)
-    input_task = @async read(stdin, Char)
-    has_tty = true
-    println("Starting, press 'p' to pause, 'q' to abort")
-  catch e
-    throw(e)
-    println("Failed to setup input management")
-  end
-
-
   while i < params.max_iter
     i += 1
     if i % 10 == 0
       print("\b"^200 * "[i=$(lpad(i, 5, " "))]")
-    end
-    #if should_terminate
-    #  if has_tty
-    #    Base.run(`stty icanon`)
-    #  end
-    #  return
-    #end
-    if has_tty && istaskdone(input_task)
-      key = fetch(input_task)
-      if key == 'q'
-        Base.run(`stty icanon`)
-        return
-      elseif key == 'p'
-        println("Paused, press <ENTER> to continue")
-        readline()
-      end
-      input_task = @async read(stdin, Char)
     end
     if params.time_stepping == :simple
       if params.constant_a
@@ -526,17 +507,26 @@ function launch(params_in, store_path)
         compute_a!(a, a_prime, µ, µC, params, f, g)
       end
       compute_df!(df, params, f, a, a_prime)
+      if !params.constant_g && !params.f_dependent_g
+        compute_dg!(dg, params, g, a, a_prime)
+      end
       @assert !(df .|> isnan |> any) "\n NaN detected in df at iteration $i"
       if params.flux == :KT
         f .= df
       else
         f .-= params.δt / params.δx * df
-      end
-      if !params.full_g
-        compute_dg!(dg, params, g, a, a_prime)
-        g .-= params.δt / params.δx * dg
+        if !params.constant_g
+          if params.f_dependent_g
+            g .= 0.5params.N_discrete * f .* α_init .* f'
+          else
+            g .-= params.δt / params.δx * dg
+          end
+        end
       end
     elseif params.time_stepping == :RK4
+      if params.f_dependent_f
+        throw("not implemented")
+      end
       # Stage 1
       stage = 1
 
@@ -548,12 +538,12 @@ function launch(params_in, store_path)
       end
 
       compute_df!(view(RK4_df, :, stage), params, f, a, a_prime)
-      if !params.full_g
+      if !params.constant_g
         compute_dg!(view(RK4_dg, :, stage), params, g, a, a_prime)
       end
 
       RK4_f[:, stage] .= f .- 0.5 .* params.δt ./ params.δx .* RK4_df[:, stage]
-      if !params.full_g
+      if !params.constant_g
         RK4_g[:, :, stage] .= g .- 0.5 .* params.δt ./ params.δx .* RK4_dg[:, :, stage]
       end
 
@@ -565,12 +555,12 @@ function launch(params_in, store_path)
       end
 
       compute_df!(view(RK4_df, :, stage), params, RK4_f[:, stage-1], a, a_prime)
-      if !params.full_g
+      if !params.constant_g
         compute_dg!(view(RK4_dg, :, stage), params, RK4_g[:, :, stage-1], a, a_prime)
       end
 
       RK4_f[:, stage] .= f .- 0.5 .* params.δt ./ params.δx .* RK4_df[:, stage]
-      if !params.full_g
+      if !params.constant_g
         RK4_g[:, :, stage] .= g .- 0.5 .* params.δt ./ params.δx .* RK4_dg[:, :, stage]
       end
 
@@ -582,12 +572,12 @@ function launch(params_in, store_path)
       end
 
       compute_df!(view(RK4_df, :, stage), params, RK4_f[:, stage-1], a, a_prime)
-      if !params.full_g
+      if !params.constant_g
         compute_dg!(view(RK4_dg, :, stage), params, RK4_g[:, :, stage-1], a, a_prime)
       end
 
       RK4_f[:, stage] .= f .- params.δt ./ params.δx .* RK4_df[:, stage]
-      if !params.full_g
+      if !params.constant_g
         RK4_g[:, :, stage] .= g .- params.δt ./ params.δx .* RK4_dg[:, :, stage]
       end
 
@@ -599,30 +589,31 @@ function launch(params_in, store_path)
       end
 
       compute_df!(view(RK4_df, :, stage), params, RK4_f[:, stage-1], a, a_prime)
-      if !params.full_g
+      if !params.constant_g
         compute_dg!(view(RK4_dg, :, stage), params, RK4_g[:, :, stage-1], a, a_prime)
       end
 
       df .= (RK4_df[:, 1] .+ 2RK4_df[:, 2] + 2RK4_df[:, 3] + RK4_df[:, 4]) ./ 6
-      if !params.full_g
+      if !params.constant_g
         dg .= (RK4_dg[:, :, 1] .+ 2RK4_dg[:, :, 2] + 2RK4_dg[:, :, 3] + RK4_dg[:, :, 4]) ./ 6
       end
 
       f -= params.δt / params.δx * df
-      if !params.full_g
+      if !params.constant_g
         g -= params.δt / params.δx * dg
       end
     else
       throw("Unkown time-stepping method '$(params.time_stepping)'")
     end
 
-    if params.store
+    if params.store && i % params.store_every_iter == 0
       push!(store_i, i)
       push!(store_f, copy(f))
-      if !params.full_g
+      push!(store_fαf_M1, sum(x .* f .* α_init .* f') / sum(f .* α_init .* f'))
+      if !params.constant_g
+        push!(store_g_M1, sum(x .* g) / sum(g))
         push!(store_g, (i, copy(g)))
         if length(store_g) > 100
-          # print(" - flushing g to disk\n")
           HDF5.h5open(joinpath(params.store_path, "data_meanfield.h5"), "cw") do fid
             for (i, g) in store_g
               fid["g/$(i)"] = g
@@ -634,15 +625,15 @@ function launch(params_in, store_path)
     end
   end
 
-  if has_tty
-    Base.run(`stty icanon`)
-  end
-
   if params.store
     @info "Saving data to disk @ $(params.store_path)"
     HDF5.h5open(joinpath(params.store_path, "data_meanfield.h5"), "cw") do fid
+      fid["i"] = store_i
       fid["f"] = hcat(store_f...)
-      if !params.full_g
+      fid["α_init"] = α_init
+      fid["fαf_M1"] = store_fαf_M1
+      if !params.constant_g
+        fid["g_M1"] = store_g_M1
         for (i, g) in store_g
           fid["g/$(i)"] = g
         end
@@ -657,6 +648,15 @@ function launch(params_in, store_path)
   p = UnicodePlots.lineplot(a, width=100, height=30, name="a")
   UnicodePlots.lineplot!(p, a_init, name="a_init")
   println(p)
+
+  if params.store
+    p = UnicodePlots.lineplot(store_fαf_M1, width=100, height=30, name="∫∫ ω fαf(ω,m) dω dm")
+    println(p)
+    if !params.constant_g
+      p = UnicodePlots.lineplot(store_g_M1, width=100, height=30, name="∫∫ ω g(ω,m) dω dm")
+      println(p)
+    end
+  end
 
   @info @fmt extrema(f)
 

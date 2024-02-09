@@ -10,9 +10,9 @@ function main(suffix)
 
   ### Discretization ###
   N = 301
-  N_discrete = 200
+  N_discrete = 1000
   δt = 1e-3
-  max_iter = 20000
+  max_iter = 20_000
 
   ### Visualization ###
   plot_scale = identity
@@ -22,6 +22,7 @@ function main(suffix)
   # Storage
   store = true
   store_overwrite = false
+  store_every_iter = 10
 
   ### Model ###
   # σ = 0.0 => Echo chambers only
@@ -136,8 +137,10 @@ function main(suffix)
 
   #### α (connectivity discribution) ####
 
-  full_α = false
+  constant_α = true
+  constant_g = false
   full_adj_matrix = false
+  f_dependent_g = true
 
   # Density of the connections
   # g_init will be normalized so that
@@ -153,18 +156,18 @@ function main(suffix)
   function α_init_func(x::Vector{Float64})
     ω, m = x
     stddev = 0.3
-    r = exp(-(ω - m)^2 / stddev^2) + 0.1
+    r = 0.1 * exp(-(ω - m)^2 / stddev^2) + 0.0
     return r
   end
 
-  if !full_α
+  if !constant_α
     _α = α_init_func
   else
     _α = (x) -> 1.0
   end
 
   ###########################################################################################################
-  #                        YOU PROBABLY SHOULD TOUCH THE BLOCK BELOW                                        #
+  #                        YOU PROBABLY SHOULD NOT TOUCH THE BLOCK BELOW                                    #
   ###########################################################################################################
 
   # DEFINITION G
@@ -173,8 +176,6 @@ function main(suffix)
   α_init_func_scaled = (ω, m) -> g_prefactor * _α([ω, m])
   # DEFINITION_G
   g_init_func_scaled = (ω, m) -> 0.5 * N_discrete * α_init_func_scaled(ω, m) * f_init_func(ω) * f_init_func(m)
-
-  @show g_init_func_scaled
 
   ω_inf_mf_init = OpiForm.compute_ω_inf_mf(g_init_func_scaled, connection_density * N_discrete)
 
@@ -186,11 +187,13 @@ function main(suffix)
 
   ### adj_matrix ###
   if !full_adj_matrix
-    g_sampling_result = OpiForm.sample_g_init(ops_init, f_init_func, α_init_func_scaled, connection_density, full_α)
+    g_sampling_result = OpiForm.sample_g_init(ops_init, f_init_func, α_init_func_scaled, connection_density, constant_α)
     adj_matrix = g_sampling_result.A
   else
     adj_matrix = nothing
   end
+
+
   #
   ###########################################################################################################
   #                                                                                                         #
@@ -202,7 +205,7 @@ function main(suffix)
   # :LF (Lax-Friedrich)
   # :lLF (local Lax-Friedrich)
   # :godunov
-  # :full_godunov
+  # :constant_godunov
   # :upwind
   # :KT
   flux = :lLF
@@ -278,9 +281,11 @@ function main(suffix)
     f_init_func=f_init_func,
     ### g
     g_init_func_scaled=g_init_func_scaled,
+    α_init_func_scaled=α_init_func_scaled,
     g_init=g_init,
-    full_α=full_α, # if true, then g = 1 (modulo normalization). Overrides g_init.
-    full_g=false, # legacy parameter, unused, should be false
+    f_dependent_g=f_dependent_g,
+    constant_α=constant_α, # if true, then g = 1 (modulo normalization). Overrides g_init.
+    constant_g=constant_g, # legacy parameter, unused, should be false
     ω_inf_mf_init=ω_inf_mf_init,
 
     ### Discrete model
@@ -297,6 +302,7 @@ function main(suffix)
     # storage
     store=store,
     store_overwrite=store_overwrite,
+    store_every_iter=store_every_iter,
 
     # solver
     flux=flux,
@@ -313,22 +319,26 @@ function main(suffix)
 
   OpiForm.set_makie_backend(:gl)
 
-  params_lLF = merge(params, (flux=:lLF,))
+  params_lLF = merge(params, (flux=:lLF, f_dependent_g=false))
   store_path = "results/test_meanfield_lLF_" * suffix
   OpiForm.MeanField.launch(params_lLF, store_path)
 
-  store_path = "results/test_discrete_" * suffix
-  OpiForm.Discrete.launch(params, store_path)
+  params_fdg = merge(params, (f_dependent_g=true,))
+  store_path = "results/test_meanfield_lLF_fdg_" * suffix
+  OpiForm.MeanField.launch(params_fdg, store_path)
+
+  #store_path = "results/test_discrete_" * suffix
+  #OpiForm.Discrete.launch(params, store_path)
 
 end
 
-suffix = "_omega_inf_c=0.1"
+suffix = "debug_drift_6"
 
 #########################
 #          RUN          #
 #########################
 
-main(suffix)
+# main(suffix)
 
 #########################
 #         PLOT          #
@@ -337,17 +347,36 @@ main(suffix)
 # OpiForm.plot_result("test_$(suffix).mp4";
 #   meanfield_dir="results/test_meanfield_lLF_" * suffix,
 #   discrete_dir="results/test_discrete_" * suffix,
-#   center_histogram=false)
-
-OpiForm.compare_peak2peak(
-  "results/test_meanfield_lLF_" * suffix,
-  "results/test_discrete_" * suffix,
-)
-#
-# OpiForm.compare_peak2peak(
-#   ["results/test_meanfield_lLF_" * suffix],
-#   ["results/test_discrete_" * suffix_old, "results/test_discrete_" * suffix]
+#   half_connection_matrix=true
 # )
 
-#OpiForm.plot_result("results/test_meanfield" * suffix, meanfield_dir="results/test_meanfield" * suffix)
-#OpiForm.plot_result(meanfield_dir="results/test_meanfield" * suffix, discrete_dir="results/test_discrete" * suffix)
+OpiForm.plot_result("test_$(suffix).mp4";
+  meanfield_dirs=[
+    "results/test_meanfield_lLF_" * suffix,
+    #"results/test_meanfield_lLF_fdg_" * suffix,
+  ],
+  discrete_dirs=String[],
+  half_connection_matrix=true
+)
+
+OpiForm.plot_result("test_$(suffix)_fdg.mp4";
+  meanfield_dirs=[
+    # "results/test_meanfield_lLF_" * suffix,
+    "results/test_meanfield_lLF_fdg_" * suffix,
+  ],
+  discrete_dirs=String[],
+  half_connection_matrix=true
+)
+
+# OpiForm.compare_peak2peak(
+#   [
+#     "results/test_meanfield_lLF_" * suffix,
+#     "results/test_meanfield_lLF_fdg_" * suffix
+#   ], String[]
+# )
+
+# OpiForm.compare_peak2peak(
+#   "results/test_meanfield_lLF_" * suffix,
+#   "results/test_discrete_" * suffix,
+# )
+

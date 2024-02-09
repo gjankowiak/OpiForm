@@ -61,6 +61,23 @@ function get_makie_backend()
   return M
 end
 
+function get_memory_usage(type)
+  mem = parse(Int, chomp(read(`ps -p $(getpid()) -h -o size`, String)))
+  if type == String
+    gbs = Int(floor(mem / 1_000_000))
+    mbs = Int(ceil((mem - gbs * 1_000_000) / 1_000))
+    if gbs > 0
+      return "$(gbs).$(mbs) GB"
+    else
+      return "$(mbs) MB"
+    end
+  elseif type in [Int, UInt]
+    return mem
+  else
+    throw("not implemented for type $(type)")
+  end
+end
+
 function find_support_bounds(f::Array{Float64,2}, x; tol::Float64=1e-5)
   # If no element is larger than tol, we return 0, so that the choice of the value in
   # the ternary operator (here, x[1]) is arbitrary
@@ -110,14 +127,63 @@ function compute_ω_inf_mf(g_init_func_scaled, g_init_integral)
   end
 end
 
-function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, connection_density, full_α::Bool; symmetric::Bool=true)
+function fast_sampling!(A, α, n; symmetric::Bool=true, constant_α::Bool=false)
+  N = size(A, 1)
+
+  if !constant_α
+
+    # this can overflow
+    acc = cumsum(vec(α))
+    acc ./= acc[end]
+  end
+
+  accepted = 0
+  tried = 0
+
+  n_digits = Int(ceil(log10(n)))
+
+  while accepted < n
+    tried += 1
+    if !constant_α
+      t = rand()
+      r = searchsorted(acc, t)
+      if length(r) == 0
+        idx = r.start
+      else
+        idx = rand(r)
+      end
+
+      p, q = divrem(idx - 1, N)
+      i, j = p + 1, q + 1
+    else
+      i, j = rand(1:N), rand(1:N)
+    end
+
+    if A[i, j] == 0
+      A[i, j] = 1
+      accepted += 1
+      if symmetric
+        A[j, i] = 1
+        accepted += 1
+        tried += 1
+      end
+
+      if accepted % 100 == 0
+        print("  $(lpad(accepted, n_digits, " "))/$(n) ($(round(accepted/tried*100; digits=5))% accepted)", "\b"^100)
+      end
+    end
+  end
+end
+
+function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, connection_density, constant_α::Bool;
+  symmetric::Bool=true, fast::Bool=true)
   N_discrete = length(f_samples)
   g_init_integral = connection_density * N_discrete
 
   @assert N_discrete > 0 "No samples provided!"
   @assert connection_density < 1 "connection_density >= 1!"
 
-  if !full_α
+  if !constant_α
     # Compute all the couples g_init(ω_i, ω_j)
     # FIXME: use the symmetry to speed up the computation
     α_init_samples = [i == j ? 0.0 : α_init_func_scaled(f_samples[i], f_samples[j]) for i = 1:N_discrete, j = 1:N_discrete]
@@ -159,10 +225,11 @@ function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, conne
   accepted = 0
   tried = 0
 
-
   # do the actually sampling
   # this is very slow if the matrix is large and sparse
-  @time begin
+  if fast
+    fast_sampling!(A, α_init_samples, N_entries; symmetric=symmetric, constant_α=constant_α)
+  else
     while accepted < N_entries
       # sample a couple of indices (uniformely)
       i, j = rand(1:N_discrete), rand(1:N_discrete)
@@ -174,7 +241,7 @@ function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, conne
         continue
       end
 
-      if full_α || (rand() < α_init_func_scaled(f_samples[i], f_samples[j]) / sum_α_samples)
+      if constant_α || (rand() < α_init_samples(i, j) / sum_α_samples)
         A[i, j] = 1
         accepted += 1
         if symmetric
@@ -188,7 +255,6 @@ function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, conne
 
     end
     println()
-
   end
 
   # compute the discrepency between A and the #I_i
@@ -392,32 +458,42 @@ function plot_results(output_filename::String;
   end
 
 
+  half_connection_matrix = get(kwargs, :half_connection_matrix, false)
+
   center_histogram = get(kwargs, :center_histogram, false)
   if center_histogram
     @warn "Centering histograms, plots are biased!"
   end
 
   obs_i = M.Observable(1)
+  obs_iter = M.Observable(0)
 
   if has_mf
     labels = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mf_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
     f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
 
+    α_init_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "α_init"), meanfield_dirs)
+
+    N_discrete_mf_a = map(dn -> (
+        meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
+        return meta["N_discrete"]
+      ), meanfield_dirs)
+
     N_a = map(f -> size(f, 1), f_a)
-    max_iter = minimum(map(f -> size(f, 2), f_a))
 
     obs_g_k = nothing
-    function get_g_k(dn, i)
+    function get_g_iter(dn, iter)
       try
-        return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$(i-1)")
+        return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$iter")
       catch
         return nothing
       end
     end
 
-    obs_g_k = map(dn -> (M.@lift get_g_k(dn, $obs_i)), meanfield_dirs)
+    obs_g_k = map(dn -> (M.@lift get_g_iter(dn, $obs_iter)), meanfield_dirs)
 
-    full_g = isnothing(obs_g_k[1][])
+    constant_g = isnothing(obs_g_k[1][])
 
     function build_x(N)
       δx = 2 / N
@@ -432,7 +508,7 @@ function plot_results(output_filename::String;
   if has_d
     discrete_dir = discrete_dirs[1]
     ops = load_hdf5_data(joinpath(discrete_dir, "data_discrete.h5"), "ops")
-    mean_ops = Statistics.mean(ops)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "i"), discrete_dirs)
     adj_matrix_full = load_hdf5_data(joinpath(discrete_dir, "data_discrete.h5"), "adj_matrix")
     adj_matrix = isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full)
     N_discrete = size(ops, 1)
@@ -446,6 +522,9 @@ function plot_results(output_filename::String;
       xs = Vector{Float64}(undef, adj_matrix_nnz)
       ys = Vector{Float64}(undef, adj_matrix_nnz)
 
+      obs_xs = M.Observable(view(xs, 1:adj_matrix_nnz))
+      obs_ys = M.Observable(view(ys, 1:adj_matrix_nnz))
+
       function get_xy(opis)
         rows = SpA.rowvals(adj_matrix)
         got = 0
@@ -453,30 +532,42 @@ function plot_results(output_filename::String;
           nzr = SpA.nzrange(adj_matrix, j)
           nnz_in_col = length(nzr)
 
-          xs[got+1:got+nnz_in_col] .= opis[rows[nzr]]
-          ys[got+1:got+nnz_in_col] .= opis[j]
+          if half_connection_matrix
+            opis_x = view(opis, rows[nzr])
 
-          got += nnz_in_col
+            idc = opis_x .> opis[j]
+            nnz_in_col = length(filter(isone, idc))
+
+            xs[got+1:got+nnz_in_col] .= opis_x[idc]
+            ys[got+1:got+nnz_in_col] .= opis[j]
+
+            got += nnz_in_col
+          else
+            xs[got+1:got+nnz_in_col] .= opis[rows[nzr]]
+            ys[got+1:got+nnz_in_col] .= opis[j]
+
+            got += nnz_in_col
+          end
         end
+
         if center_histogram
           xs .-= ω_inf_d
           ys .-= ω_inf_d
         end
-        @assert got == adj_matrix_nnz
+
+        if half_connection_matrix
+          obs_xs[] = view(xs, 1:got)
+          obs_ys[] = view(ys, 1:got)
+        end
+
       end
 
       get_xy(ops[:, 1])
-      obs_xs = M.Observable(xs)
-      obs_ys = M.Observable(xs)
     else
       ω_inf_d = sum(ops[:, 1]) / N_discrete
     end
   end
 
-
-  if has_mf && has_d
-    max_iter = min(max_iter, size(ops, 2))
-  end
 
   set_makie_backend(:gl)
 
@@ -484,42 +575,23 @@ function plot_results(output_filename::String;
   ax1 = M.Axis(fig[1:4, 1])
   ax1.title = "f / ω_i"
 
-  ax2 = M.Axis(fig[1:4, 2])
-  ax2.title = "f / ω_i"
+  if has_mf
+    ax2 = M.Axis(fig[1:4, 2])
+    ax2.title = "g(ω,m)"
 
-  if has_mf && !full_g
-    ax3 = M.Axis(fig[6:9, 1])
-    ax3.title = "g(ω,m)"
+    ax3 = M.Axis(fig[1:4, 3])
+    ax3.title = "f α f"
+
+    g_bottom = fig[5, 1:3] = M.GridLayout()
+  else
+    g_bottom = fig[5, 1:2] = M.GridLayout()
   end
 
-  if has_d && !isnothing(adj_matrix)
-    ax4 = M.Axis(fig[6:9, 2])
-    ax4.title = "connections"
-  end
 
-  g_bottom = fig[5, 1:2] = M.GridLayout()
-
-  if has_d
-    if center_histogram
-      obs_ops = M.@lift (ops[:, $obs_i] .- ω_inf_d)
-    else
-      obs_ops = M.@lift ops[:, $obs_i]
-    end
-    obs_extrema_ops = M.@lift extrema($obs_ops)
-
-    M.hist!(ax1, obs_ops; bins=50, normalization=:pdf)
-    M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
-    M.hist!(ax2, obs_ops; bins=50, normalization=:pdf)
-    M.vlines!(ax2, ω_inf_d, color=:grey, ls=0.5)
-
-    if !isnothing(adj_matrix)
-      M.scatter!(ax4, obs_xs, obs_ys, alpha=0.2, markersize=4)
-      M.limits!(ax4, (-1, 1), (-1, 1))
-    end
-  end
 
   if has_mf
     obs_f_a = [M.@lift f_a[k][:, $obs_i] for k in 1:K_mf]
+    obs_fαf_a = [M.@lift 0.5 * N_discrete_mf_a[k] * f_a[k][:, $obs_i] .* α_init_a[k] .* f_a[k][:, $obs_i]' for k in 1:K_mf]
 
     function find_support(f_a)
       left_idc = map(f -> (idx = findfirst(x -> x > 1e-5, f[]); return (isnothing(idx) ? 1 : idx)), f_a)
@@ -539,54 +611,68 @@ function plot_results(output_filename::String;
       return maximum(map(f -> maximum(f[]), f_a))
     end
 
-    if !full_g
-      obs_gff_a = [M.Observable(obs_f_a[k][]' .* obs_g_k[k][] .* obs_f_a[k][]) for k in 1:K_mf]
+    if !constant_g
+      obs_gff_a = [M.Observable(obs_g_k[k][]) for k in 1:K_mf]
     end
 
     for k in 1:K_mf
       M.lines!(ax1, x_a[k], obs_f_a[k], label=labels[k])
 
-      #M.vspan!(ax2, -δx / 2, δx / 2, color=:grey, alpha=0.3)
-      M.barplot!(ax2, x_a[k], obs_f_a[k], gap=0)
+      #M.barplot!(ax3, x_a[k], obs_f_a[k], gap=0)
 
-      if !full_g
-        M.heatmap!(ax3, x_a[k], x_a[k], obs_gff_a[k])
-        #M.heatmap!(ax3, x_a[k], x_a[k], M.@lift log10.(abs.($o)))
+      if !constant_g
+        M.heatmap!(ax2, x_a[k], x_a[k], obs_gff_a[k])
       end
+      M.heatmap!(ax3, x_a[k], x_a[k], obs_fαf_a[k])
     end
 
     legend = M.Legend(g_bottom[1, 1], ax1)
 
   end
 
-  i_range = 1:10:max_iter
-
-  function step_i(i)
-    if i % 10 == 0 || i == max_iter
-      print("  ", lpad(i, 5, " "), "/", max_iter, "\b"^50)
+  if has_d
+    if center_histogram
+      obs_ops = M.@lift (ops[:, $obs_i] .- ω_inf_d)
+    else
+      obs_ops = M.@lift ops[:, $obs_i]
     end
+    obs_extrema_ops = M.@lift extrema($obs_ops)
+
+    M.hist!(ax1, obs_ops; bins=50, normalization=:pdf)
+    M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
+    # M.hist!(ax3, obs_ops; bins=50, normalization=:pdf)
+    # M.vlines!(ax3, ω_inf_d, color=:grey, ls=0.5)
+
+    if !isnothing(adj_matrix)
+      M.scatter!(ax2, obs_xs, obs_ys, alpha=0.0005, markersize=4, color=:black, strokewidth=0.05, transparency=true)
+      M.limits!(ax2, (-1, 1), (-1, 1))
+      M.limits!(ax3, (-1, 1), (-1, 1))
+    end
+  end
+
+  function step_i(tuple)
+    i, iter = tuple
 
     if has_mf && any(f -> any(isnan, f[:, i]), f_a)
       return
     end
 
     obs_i[] = i
+    obs_iter[] = iter
     if has_mf
       first_mass = 2 / N_a[1] * sum(f_a[1][:, i])
-      ax1.title = "$i, M[1] = $(round(first_mass; digits=6))"
+      ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
     else
-      ax1.title = string(i)
+      ax1.title = string(iter)
     end
 
     if has_d && !isnothing(adj_matrix)
       get_xy(obs_ops[])
-      obs_xs[] = xs
-      obs_ys[] = ys
     end
 
-    if !full_g
+    if !constant_g
       for k in 1:K_mf
-        obs_gff_a[k][] = obs_f_a[k][]' .* obs_g_k[k][] .* obs_f_a[k][]
+        obs_gff_a[k][] = obs_g_k[k][]
       end
     end
 
@@ -595,24 +681,21 @@ function plot_results(output_filename::String;
       max_f = find_max(obs_f_a)
       M.ylims!(ax1, low=-1, high=1.3 * max_f)
       M.xlims!(ax1, low=support.left, high=support.right)
-      M.xlims!(ax2, low=support.left, high=support.right)
-      M.ylims!(ax2, low=-1, high=1.3 * max_f)
+      # M.xlims!(ax3, low=support.left, high=support.right)
+      # M.ylims!(ax3, low=-1, high=1.3 * max_f)
 
-      M.xlims!(ax3, low=support.left, high=support.right)
-      M.ylims!(ax3, low=support.left, high=support.right)
+      M.xlims!(ax2, low=support.left, high=support.right)
+      M.ylims!(ax2, low=support.left, high=support.right)
 
     else
       M.autolimits!(ax1)
-      M.autolimits!(ax2)
-      M.xlims!(ax2, low=obs_extrema_ops[][:left], high=obs_extrema_ops[][:right])
+      # M.autolimits!(ax3)
+      # M.xlims!(ax3, low=obs_extrema_ops[][:left], high=obs_extrema_ops[][:right])
     end
 
-    if has_d && !isnothing(adj_matrix)
-      M.xlims!(ax4, low=support.left, high=support.right)
-      M.ylims!(ax4, low=support.left, high=support.right)
-    end
   end
 
+  i_range = enumerate(i_mf_a[1])
   M.record(step_i, fig, output_filename, i_range)
   @info ("movie saved at $output_filename")
 
@@ -651,10 +734,10 @@ function compare_peak2peak(
 
   if K_mf > 0
     labels_mf = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mf_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
     f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
 
     N_a = map(f -> size(f, 1), f_a)
-    max_iter = minimum(map(f -> size(f, 2), f_a))
 
     function build_x(N)
       δx = 2 / N
@@ -670,42 +753,42 @@ function compare_peak2peak(
     support_bounds_mf_a = find_support_bounds(f_a, x_a)
     support_width_mf_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mf_a]
 
-    ω_inf_mf_a = [zeros(max_iter) for i in 1:K_mf]
+    # function get_g_iter(dn, iter)
+    #   try
+    #     return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$iter")
+    #   catch
+    #     return nothing
+    #   end
+    # end
 
-    function get_g_i(dn, k)
-      try
-        return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$(k-1)")
-      catch
-        return nothing
-      end
-    end
+    # function compute_weighted_avgs(k)
+    #   dn = meanfield_dirs[k]
+    #   ω_inf_mf = zeros(length(i_mf_a[k]))
+    #   for (i, iter) in enumerate(i_mf_a[k])
+    #     g = get_g_iter(dn, iter)
+    #     @assert !isnothing(g)
+    #     ω_inf_mf[i] = sum(g .* x_a[k]) / sum(g)
+    #   end
+    #   return ω_inf_mf
+    # end
 
-    function compute_weighted_avgs(k)
-      dn = meanfield_dirs[k]
-      ω_inf_mf = zeros(max_iter)
-      for i = 1:max_iter
-        g = get_g_i(dn, i)
-        ω_inf_mf[i] = sum(g .* x_a[k]) / sum(g)
-      end
-      return ω_inf_mf
-    end
-
-    ω_inf_mf_a = [compute_weighted_avgs(k) for k in eachindex(meanfield_dirs)]
+    g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g_M1"), meanfield_dirs)
 
   end
 
   if K_d > 0
     labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), discrete_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "i"), discrete_dirs)
     ops_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "ops"), discrete_dirs)
 
     adj_matrix_full_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "adj_matrix"), discrete_dirs)
     adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
     N_discrete_a = map(ops -> size(ops, 1), ops_a)
 
-    function compute_weighted_avg(i)
-      adj_matrix = adj_matrix_a[i]
-      ops = ops_a[i]
-      N_discrete = N_discrete_a[i]
+    function compute_weighted_avg(k)
+      adj_matrix = adj_matrix_a[k]
+      ops = ops_a[k]
+      N_discrete = N_discrete_a[k]
 
       if !isnothing(adj_matrix)
         sharp_I = vec(sum(adj_matrix; dims=2))
@@ -717,11 +800,9 @@ function compare_peak2peak(
       end
     end
 
-    ω_inf_d_a = [compute_weighted_avg(i) for i in 1:K_d]
+    ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
     p2p_d_a = [peak2peak(ops; dims=1) for ops in ops_a]
     extrema_d_a = [extrema(ops; dims=1) for ops in ops_a]
-
-    max_iter = reduce((m, ops) -> min(m, size(ops, 2)), ops_a; init=max_iter)
   end
 
   set_makie_backend(:gl)
@@ -730,22 +811,25 @@ function compare_peak2peak(
   ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="iterations", title=M.L"\max_i\;\omega_i - \min_i\;\omega_i")
   ax2 = M.Axis(fig[1, 2], xlabel="iterations", title=M.L"\omega_\inf \quad \min_i\; \omega_i \quad \max_i\; \omega_i")
 
-  for i in eachindex(p2p_d_a)
-    r = 2:max_iter
-    p2p = p2p_d_a[i]
-    M.lines!(ax1, r, p2p[2:end], label=labels_d[i])
+  for k in 1:K_d
+    r = i_d_a[k]
+    p2p = p2p_d_a[k]
+    M.lines!(ax1, r, p2p, label=labels_d[k])
 
-    M.lines!(ax2, r, ω_inf_d_a[i][r], label=labels_d[i])
-    M.band!(ax2, r, map(v -> v[1], extrema_d_a[i][r]), map(v -> v[2], extrema_d_a[i][r]), alpha=0.2)
+    M.lines!(ax2, r, ω_inf_d_a[k], label=labels_d[k])
+    left_bounds = vec(map(v -> v[1], extrema_d_a[k]))
+    right_bounds = vec(map(v -> v[2], extrema_d_a[k]))
+    M.band!(ax2, r, left_bounds, right_bounds, alpha=0.2)
   end
 
-  for i in eachindex(support_width_mf_a)
-    p2p = support_width_mf_a[i]
-    M.lines!(ax1, 1:max_iter, p2p, label=labels_mf[i])
+  for k in 1:K_mf
+    p2p = support_width_mf_a[k]
+    r = i_mf_a[k]
+    M.lines!(ax1, r, p2p, label=labels_mf[k])
 
-    M.hlines!(ax2, ω_inf_mf_init_a[i])
-    M.lines!(ax2, 1:max_iter, ω_inf_mf_a[i][1:max_iter])
-    M.band!(ax2, 1:max_iter, map(v -> v[1], support_bounds_mf_a[i]), map(v -> v[2], support_bounds_mf_a[i]), alpha=0.2)
+    M.hlines!(ax2, ω_inf_mf_init_a[k])
+    M.lines!(ax2, r, g_M1_a[k])
+    M.band!(ax2, r, map(v -> v[1], support_bounds_mf_a[k]), map(v -> v[2], support_bounds_mf_a[k]), alpha=0.2)
   end
 
   #M.axislegend()

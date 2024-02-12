@@ -90,7 +90,9 @@ function compute_ω_inf_mf(g_init_func_scaled, g_init_integral)
   if isnothing(g_init_func_scaled)
     return 0.0
   else
-    return (Cubature.hcubature(x -> x[1] * g_init_func_scaled(x[1], x[2]), [-1; -1], [1; 1])[1]) / g_init_integral
+    @info "Computing g's first moment"
+    return (Cubature.pcubature(x -> x[1] * g_init_func_scaled(x[1], x[2]), [-1; -1], [1; 1])[1]) / g_init_integral
+    @info "Done"
   end
 end
 

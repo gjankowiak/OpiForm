@@ -5,15 +5,7 @@ import HDF5
 
 import Graphs: SimpleGraph, is_connected, connected_components
 
-import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare, issymmetric, @fmt
-
-macro left(v, fill=0.0)
-  return esc(:(SA.shiftedarray($v, 1, $fill)))
-end
-
-macro right(v, fill=0.0)
-  return esc(:(SA.shiftedarray($v, -1, $fill)))
-end
+import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare, issymmetric, symmetry_defect, @fmt, @left, @right
 
 function check_connected(M::Array{Int64,2})
   g = SimpleGraph(M)
@@ -240,8 +232,8 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
     flux_lω = 0.5 * (g_lω .* a_l .+ g .* a .- params.LF_relaxation * max_C_l .* (g .- g_lω))
     flux_rω = 0.5 * (g_rω .* a_r .+ g .* a .- params.LF_relaxation * max_C_r .* (g_rω .- g))
 
-    flux_lm = 0.5 * (g_lm .* a_l' .+ g .* a' .- params.LF_relaxation * max_C_l .* (g .- g_lm))
-    flux_rm = 0.5 * (g_rm .* a_r' .+ g .* a' .- params.LF_relaxation * max_C_r .* (g_rm .- g))
+    flux_lm = 0.5 * (g_lm .* a_l' .+ g .* a' .- params.LF_relaxation * max_C_l' .* (g .- g_lm))
+    flux_rm = 0.5 * (g_rm .* a_r' .+ g .* a' .- params.LF_relaxation * max_C_r' .* (g_rm .- g))
   elseif params.flux == :LF
     max_C = maximum(abs, a)
 
@@ -263,7 +255,9 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
   flux_lm[1] = 0
   flux_rm[end] = 0
 
-  dst .= flux_rω - flux_lω + flux_rm - flux_lm
+  @. dst = flux_rω - flux_lω + flux_rm - flux_lm
+
+
 end
 
 function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, g)

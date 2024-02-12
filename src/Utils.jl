@@ -1,4 +1,23 @@
-function issymmetric(A::Matrix{T}; tol::Float64=1e-8) where T <: Real
+function symmetry_defect(A::Matrix{T}) where {T<:Real}
+  if size(A, 1) != size(A, 2)
+    return Inf
+  end
+  N = size(A, 1)
+  m = 0
+  i_defect, j_defect = 0, 0
+  @inbounds for i in 1:N
+    for j in i:N
+      d = abs(A[i, j] - A[j, i])
+      if d > m
+        m = d
+        i_defect, j_defect = i, j
+      end
+    end
+  end
+  return m, (i_defect, j_defect)
+end
+
+function issymmetric(A::Matrix{T}; tol::Float64=1e-8) where {T<:Real}
   if size(A, 1) != size(A, 2)
     return false
   end
@@ -95,4 +114,12 @@ function load_hdf5_data(filename::String, key::String)
   catch
     return nothing
   end
+end
+
+macro left(v, fill=0.0)
+  return esc(:(SA.shiftedarray($v, 1, $fill)))
+end
+
+macro right(v, fill=0.0)
+  return esc(:(SA.shiftedarray($v, -1, $fill)))
 end

@@ -253,6 +253,9 @@ function plot_results(output_filename::String;
       M.xlims!(ax2, low=support.left, high=support.right)
       M.ylims!(ax2, low=support.left, high=support.right)
 
+      M.xlims!(ax3, low=support.left, high=support.right)
+      M.ylims!(ax3, low=support.left, high=support.right)
+
     else
       M.autolimits!(ax1)
       # M.autolimits!(ax3)
@@ -403,4 +406,3 @@ function compare_peak2peak(
   display(fig)
 
 end
-

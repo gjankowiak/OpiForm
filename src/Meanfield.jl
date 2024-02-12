@@ -5,7 +5,7 @@ import HDF5
 
 import Graphs: SimpleGraph, is_connected, connected_components
 
-import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare, @fmt
+import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare, issymmetric, @fmt
 
 macro left(v, fill=0.0)
   return esc(:(SA.shiftedarray($v, 1, $fill)))
@@ -403,9 +403,6 @@ function launch(params_in, store_path)
     throw("Unknown EC_type '$(params_in.EC_type)'")
   end
 
-  # println(UnicodePlots.heatmap(EC_mask_matrix, width=101))
-  # readline()
-
   # Debate matrix
   D_matrix = params_in.D_kern.(x, x')
 
@@ -495,10 +492,18 @@ function launch(params_in, store_path)
 
 
   while i < params.max_iter
+
+    # Check that g is roughly symmetric
+    symmetry_tol = 1e-8
+    if !issymmetric(g, tol=symmetry_tol)
+      throw("g is not symmetric after iteration $i (with tolerance $symmetry_tol)")
+    end
+
     i += 1
     if i % 10 == 0
       print("\b"^200 * "[i=$(lpad(i, 5, " "))]")
     end
+
     if params.time_stepping == :simple
       if params.constant_a
         fill!(a, 1.0)
@@ -511,6 +516,11 @@ function launch(params_in, store_path)
         compute_dg!(dg, params, g, a, a_prime)
       end
       @assert !(df .|> isnan |> any) "\n NaN detected in df at iteration $i"
+
+      ###################################
+      #          TIME STEPPING          #
+      # #################################
+
       if params.flux == :KT
         f .= df
       else

@@ -401,8 +401,6 @@ function compare_peak2peak(
     M.band!(ax2, r, map(v -> v[1], support_bounds_mf_a[k]), map(v -> v[2], support_bounds_mf_a[k]), alpha=0.2)
   end
 
-  #M.axislegend()
-
   display(fig)
 
 end

@@ -80,7 +80,7 @@ function main(suffix)
   PP = Polynomials.Polynomial
 
   # centered bump
-  # f_init_poly = PP([1.0, -1.0]) * PP([1, 1])
+  #f_init_poly_unscaled = PP([1.0, -1.0]) * PP([1, 1])
   # @show f_init_poly
 
   # side bump
@@ -93,7 +93,7 @@ function main(suffix)
   # n_bumps = 2
   # chebyshev_coeffs = zeros(n_bumps * 2 + 1)
   # chebyshev_coeffs[end] = 1
-  # f_init_poly = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+  # f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # function f_init_func(x)
   #   return f_init_poly(x)
@@ -104,7 +104,7 @@ function main(suffix)
   # n_bumps = 3
   # chebyshev_coeffs = zeros(n_bumps * 2)
   # chebyshev_coeffs[end] = 1
-  # f_init_poly = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+  # f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # more asymmetric bumps (chebyshev)
   n_bumps = 3
@@ -137,10 +137,21 @@ function main(suffix)
 
   #### α (connectivity discribution) ####
 
-  constant_α = true
+  # use a constant α for the initialization, it will be scaled for you
+  constant_α = false
+
+  # set g as constant in space and time, this should NOT be set to true unless debugging
   constant_g = false
+
+  # use a full adjacency matrix
   full_adj_matrix = false
-  f_dependent_g = true
+
+  # set g = c f(ω) α(ω,m) f(m), i.e. do not consider g as an independent unknown
+  f_dependent_g = false
+
+  # center the initial value of ops on ω_inf_mf
+  # will probably fail if f is non zero at the boundary
+  center_ops = false
 
   # Density of the connections
   # g_init will be normalized so that
@@ -156,14 +167,14 @@ function main(suffix)
   function α_init_func(x::Vector{Float64})
     ω, m = x
     stddev = 0.3
-    r = 0.1 * exp(-(ω - m)^2 / stddev^2) + 0.0
+    r = exp(-(ω - m)^2 / stddev^2) + 0.2
     return r
   end
 
   if !constant_α
     _α = α_init_func
   else
-    _α = (x) -> 1.0
+    _α = (x) -> connection_density
   end
 
   ###########################################################################################################
@@ -171,19 +182,23 @@ function main(suffix)
   ###########################################################################################################
 
   # DEFINITION G
-  g_init_unscaled_uni = (x -> 0.5 * N_discrete * _α(x) * f_init_func(x[1]) * f_init_func(x[2]))
-  g_prefactor = OpiForm.scale_g_init(g_init_unscaled_uni, connection_density * N_discrete)
+  g_init_unscaled_uni = (x -> _α(x) * f_init_func(x[1]) * f_init_func(x[2]) / connection_density)
+  g_prefactor = OpiForm.scale_g_init(g_init_unscaled_uni, 1.0)
   α_init_func_scaled = (ω, m) -> g_prefactor * _α([ω, m])
   # DEFINITION_G
-  g_init_func_scaled = (ω, m) -> 0.5 * N_discrete * α_init_func_scaled(ω, m) * f_init_func(ω) * f_init_func(m)
+  g_init_func_scaled = (ω, m) -> α_init_func_scaled(ω, m) * f_init_func(ω) * f_init_func(m) / connection_density
 
-  ω_inf_mf_init = OpiForm.compute_ω_inf_mf(g_init_func_scaled, connection_density * N_discrete)
+  ω_inf_mf_init = OpiForm.compute_ω_inf_mf(g_init_func_scaled, 1.0)
 
   # if g_init is nothing, it will be evaluated from g_init_func_scaled
   g_init = nothing
 
   ### ops_init ###
   ops_init = OpiForm.sample_poly_dist(f_init_poly, N_discrete)
+
+  if center_ops
+    ops_init .+= ω_inf_mf_init - sum(ops_init) / length(ops_init)
+  end
 
   ### adj_matrix ###
   if !full_adj_matrix
@@ -286,6 +301,7 @@ function main(suffix)
     f_dependent_g=f_dependent_g,
     constant_α=constant_α, # if true, then g = 1 (modulo normalization). Overrides g_init.
     constant_g=constant_g, # legacy parameter, unused, should be false
+    center_ops=center_ops,
     ω_inf_mf_init=ω_inf_mf_init,
 
     ### Discrete model
@@ -320,63 +336,40 @@ function main(suffix)
   OpiForm.set_makie_backend(:gl)
 
   params_lLF = merge(params, (flux=:lLF, f_dependent_g=false))
-  store_path = "results/test_meanfield_lLF_" * suffix
+  store_path = "results/test_meanfield_" * suffix
   OpiForm.MeanField.launch(params_lLF, store_path)
 
-  params_fdg = merge(params, (f_dependent_g=true,))
-  store_path = "results/test_meanfield_lLF_fdg_" * suffix
-  OpiForm.MeanField.launch(params_fdg, store_path)
-
-  #store_path = "results/test_discrete_" * suffix
-  #OpiForm.Discrete.launch(params, store_path)
+  store_path = "results/test_discrete_" * suffix
+  OpiForm.Discrete.launch(params, store_path)
 
 end
 
-suffix = "debug_drift_6"
+suffix = "3_bumps"
 
 #########################
 #          RUN          #
 #########################
 
-# main(suffix)
+main(suffix)
 
 #########################
 #         PLOT          #
 #########################
 
-# OpiForm.plot_result("test_$(suffix).mp4";
-#   meanfield_dir="results/test_meanfield_lLF_" * suffix,
-#   discrete_dir="results/test_discrete_" * suffix,
-#   half_connection_matrix=true
-# )
+# Movie
 
 OpiForm.plot_result("test_$(suffix).mp4";
-  meanfield_dirs=[
-    "results/test_meanfield_lLF_" * suffix,
-    #"results/test_meanfield_lLF_fdg_" * suffix,
-  ],
-  discrete_dirs=String[],
+  meanfield_dir="results/test_meanfield_" * suffix,
+  discrete_dir="results/test_discrete_" * suffix,
   half_connection_matrix=true
 )
 
-OpiForm.plot_result("test_$(suffix)_fdg.mp4";
-  meanfield_dirs=[
-    # "results/test_meanfield_lLF_" * suffix,
-    "results/test_meanfield_lLF_fdg_" * suffix,
-  ],
-  discrete_dirs=String[],
-  half_connection_matrix=true
+# Comvergence plots
+
+OpiForm.compare_peak2peak(
+  [
+    "results/test_meanfield_" * suffix,
+  ], [
+    "results/test_discrete_" * suffix,
+  ]
 )
-
-# OpiForm.compare_peak2peak(
-#   [
-#     "results/test_meanfield_lLF_" * suffix,
-#     "results/test_meanfield_lLF_fdg_" * suffix
-#   ], String[]
-# )
-
-# OpiForm.compare_peak2peak(
-#   "results/test_meanfield_lLF_" * suffix,
-#   "results/test_discrete_" * suffix,
-# )
-

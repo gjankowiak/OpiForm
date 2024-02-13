@@ -1,3 +1,8 @@
+function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64, cutoff_iter=5000)
+  idc = searchsortedfirst(i_a, cutoff_iter)
+  return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
+end
+
 function plot_result(output_filename::String; meanfield_dir::Union{String,Nothing}=nothing, discrete_dir::Union{String,Nothing}=nothing, kwargs...)
   mf_dirs = isnothing(meanfield_dir) ? String[] : [meanfield_dir]
   d_dirs = isnothing(discrete_dir) ? String[] : [discrete_dir]
@@ -25,10 +30,13 @@ function plot_results(output_filename::String;
 
 
   half_connection_matrix = get(kwargs, :half_connection_matrix, false)
-
   center_histogram = get(kwargs, :center_histogram, false)
+
   if center_histogram
-    @warn "Centering histograms, plots are biased!"
+    if K_mf > 1
+      throw("Can center histogram with only one meanfield solution, you provided $K_mf")
+    end
+    @warn "Histogram for the discrete solution will be centered on ω_∞ given by the initial meanfield data!"
   end
 
   obs_i = M.Observable(1)
@@ -44,6 +52,11 @@ function plot_results(output_filename::String;
     N_discrete_mf_a = map(dn -> (
         meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
         return meta["N_discrete"]
+      ), meanfield_dirs)
+
+    ω_inf_mf_a = map(dn -> (
+        meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
+        return meta["omega_inf_mf"]
       ), meanfield_dirs)
 
     N_a = map(f -> size(f, 1), f_a)
@@ -116,10 +129,10 @@ function plot_results(output_filename::String;
           end
         end
 
-        if center_histogram
-          xs .-= ω_inf_d
-          ys .-= ω_inf_d
-        end
+        # if center_histogram
+        #   @. xs += ω_inf_mf_a[1] - ω_inf_d
+        #   @. ys += ω_inf_mf_a[1] - ω_inf_d
+        # end
 
         if half_connection_matrix
           obs_xs[] = view(xs, 1:got)
@@ -137,15 +150,18 @@ function plot_results(output_filename::String;
 
   set_makie_backend(:gl)
 
-  fig = M.Figure(size=(1024, 720))
+  warning = center_histogram ? " !!! The ω_i have been centered to ω_∞ (from MF initial data)" : ""
+
+  fig = M.Figure(size=(1920, 1080))
   ax1 = M.Axis(fig[1:4, 1])
   ax1.title = "f / ω_i"
 
   if has_mf
-    ax2 = M.Axis(fig[1:4, 2])
+    ax2 = M.Axis(fig[1:4, 2], aspect=1)
     ax2.title = "g(ω,m)"
+    ax2.xlabel = warning
 
-    ax3 = M.Axis(fig[1:4, 3])
+    ax3 = M.Axis(fig[1:4, 3], aspect=1)
     ax3.title = "f α f"
 
     g_bottom = fig[5, 1:3] = M.GridLayout()
@@ -198,7 +214,7 @@ function plot_results(output_filename::String;
 
   if has_d
     if center_histogram
-      obs_ops = M.@lift (ops[:, $obs_i] .- ω_inf_d)
+      obs_ops = M.@lift (ops[:, $obs_i] .+ ω_inf_mf_a[1] .- ω_inf_d)
     else
       obs_ops = M.@lift ops[:, $obs_i]
     end
@@ -216,8 +232,13 @@ function plot_results(output_filename::String;
     end
   end
 
+  i_range = enumerate(i_mf_a[1])
+
   function step_i(tuple)
     i, iter = tuple
+
+    pct = lpad(Int(round(100 * i / length(i_range))), 3, " ")
+    print("  Creating movie: $pct%" * "\b"^50)
 
     if has_mf && any(f -> any(isnan, f[:, i]), f_a)
       return
@@ -264,7 +285,6 @@ function plot_results(output_filename::String;
 
   end
 
-  i_range = enumerate(i_mf_a[1])
   M.record(step_i, fig, output_filename, i_range)
   @info ("movie saved at $output_filename")
 
@@ -305,6 +325,7 @@ function compare_peak2peak(
     labels_mf = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
     i_mf_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
     f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
+    params_mf_a = map(load_metadata, meanfield_dirs)
 
     N_a = map(f -> size(f, 1), f_a)
 
@@ -321,25 +342,7 @@ function compare_peak2peak(
 
     support_bounds_mf_a = find_support_bounds(f_a, x_a)
     support_width_mf_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mf_a]
-
-    # function get_g_iter(dn, iter)
-    #   try
-    #     return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$iter")
-    #   catch
-    #     return nothing
-    #   end
-    # end
-
-    # function compute_weighted_avgs(k)
-    #   dn = meanfield_dirs[k]
-    #   ω_inf_mf = zeros(length(i_mf_a[k]))
-    #   for (i, iter) in enumerate(i_mf_a[k])
-    #     g = get_g_iter(dn, iter)
-    #     @assert !isnothing(g)
-    #     ω_inf_mf[i] = sum(g .* x_a[k]) / sum(g)
-    #   end
-    #   return ω_inf_mf
-    # end
+    rates_mf_a = [compute_p2p_rate(i_mf_a[k], support_width_mf_a[k], params_mf_a[k]["delta_t"]) for k in 1:K_mf]
 
     g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g_M1"), meanfield_dirs)
 
@@ -349,6 +352,7 @@ function compare_peak2peak(
     labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), discrete_dirs)
     i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "i"), discrete_dirs)
     ops_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "ops"), discrete_dirs)
+    params_d_a = map(load_metadata, discrete_dirs)
 
     adj_matrix_full_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "adj_matrix"), discrete_dirs)
     adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
@@ -372,18 +376,20 @@ function compare_peak2peak(
     ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
     p2p_d_a = [peak2peak(ops; dims=1) for ops in ops_a]
     extrema_d_a = [extrema(ops; dims=1) for ops in ops_a]
+    rates_d_a = [compute_p2p_rate(i_d_a[k], p2p_d_a[k], params_d_a[k]["delta_t"]) for k in 1:K_d]
+
   end
 
   set_makie_backend(:gl)
 
-  fig = M.Figure(size=(1024, 720))
+  fig = M.Figure(size=(1920, 1080))
   ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="iterations", title=M.L"\max_i\;\omega_i - \min_i\;\omega_i")
   ax2 = M.Axis(fig[1, 2], xlabel="iterations", title=M.L"\omega_\inf \quad \min_i\; \omega_i \quad \max_i\; \omega_i")
 
   for k in 1:K_d
     r = i_d_a[k]
     p2p = p2p_d_a[k]
-    M.lines!(ax1, r, p2p, label=labels_d[k])
+    M.lines!(ax1, r, p2p, label=labels_d[k] * " rate: $(round(rates_d_a[k]; digits=3))")
 
     M.lines!(ax2, r, ω_inf_d_a[k], label=labels_d[k])
     left_bounds = vec(map(v -> v[1], extrema_d_a[k]))
@@ -394,12 +400,14 @@ function compare_peak2peak(
   for k in 1:K_mf
     p2p = support_width_mf_a[k]
     r = i_mf_a[k]
-    M.lines!(ax1, r, p2p, label=labels_mf[k])
+    M.lines!(ax1, r, p2p, label=labels_mf[k] * " rate: $(round(rates_mf_a[k]; digits=3))")
 
-    M.hlines!(ax2, ω_inf_mf_init_a[k])
+    M.hlines!(ax2, params_mf_a[k]["omega_inf_mf"])
     M.lines!(ax2, r, g_M1_a[k])
     M.band!(ax2, r, map(v -> v[1], support_bounds_mf_a[k]), map(v -> v[2], support_bounds_mf_a[k]), alpha=0.2)
   end
+
+  M.axislegend(ax1)
 
   display(fig)
 

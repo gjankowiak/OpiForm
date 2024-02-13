@@ -116,6 +116,10 @@ function load_hdf5_data(filename::String, key::String)
   end
 end
 
+function load_metadata(dn::String)
+  return TOML.parsefile(joinpath(dn, "metadata.toml"))
+end
+
 macro left(v, fill=0.0)
   return esc(:(SA.shiftedarray($v, 1, $fill)))
 end

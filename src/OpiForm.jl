@@ -332,6 +332,8 @@ function prepare(params, mode)
       "julia_version" => string(VERSION),
       "omega_inf_mf" => params.ω_inf_mf_init,
       "connection_density" => params.connection_density,
+      "delta_t" => params.δt,
+      "flux" => string(params.flux),
       "N_discrete" => params.N_discrete
     )
     try

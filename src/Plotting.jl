@@ -1,4 +1,4 @@
-function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64, cutoff_time=5)
+function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time=5)
   idc = searchsortedfirst(i_a * δt, cutoff_time)
   return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
 end
@@ -381,7 +381,8 @@ function compare_peak2peak(
 
     support_bounds_mf_a = find_support_bounds(f_a, x_a)
     support_width_mf_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mf_a]
-    rates_mf_a = [compute_p2p_rate(i_mf_a[k], support_width_mf_a[k], params_mf_a[k]["delta_t"]) for k in 1:K_mf]
+
+    rates_mf_a = [compute_p2p_rate(i_mf_a[k], support_width_mf_a[k], params_mf_a[k]["delta_t"]; cutoff_time=0.25 * params_mf_a[k]["delta_t"] * i_mf_a[end]) for k in 1:K_mf]
 
     g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g_M1"), meanfield_dirs)
 
@@ -415,7 +416,7 @@ function compare_peak2peak(
     ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
     p2p_d_a = [peak2peak(ops; dims=1) for ops in ops_a]
     extrema_d_a = [extrema(ops; dims=1) for ops in ops_a]
-    rates_d_a = [compute_p2p_rate(i_d_a[k], p2p_d_a[k], params_d_a[k]["delta_t"]) for k in 1:K_d]
+    rates_d_a = [compute_p2p_rate(i_d_a[k], p2p_d_a[k], params_d_a[k]["delta_t"]; cutoff_time=0.25 * params_d_a[k]["delta_t"] * i_d_a[end]) for k in 1:K_d]
 
   end
 

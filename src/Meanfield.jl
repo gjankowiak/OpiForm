@@ -347,12 +347,12 @@ function launch(params_in, store_path)
   Ω_left, Ω_right = -1, 1
   Ω_width = Ω_right - Ω_left
 
-  N = params_in.N
-  δx = Ω_width / N
+  N_mf = params_in.N_mf
+  δx = Ω_width / N_mf
 
   x_l, x_r = Ω_left + 0.5δx, Ω_right - 0.5δx
 
-  x = collect(range(x_l, x_r, N))
+  x = collect(range(x_l, x_r, N_mf))
 
   # Model parameters
   if params_in.constant_a
@@ -367,26 +367,26 @@ function launch(params_in, store_path)
 
   # Echo chamber mask matrix
   if params_in.EC_type == :characteristic
-    EC_idx_span = Int(floor(min(N - 1, params_in.EC_ρ / δx)))
-    EC_mask_matrix = SpA.spdiagm([i => ones(N - abs(i)) for i in -EC_idx_span:EC_idx_span]...)
+    EC_idx_span = Int(floor(min(N_mf - 1, params_in.EC_ρ / δx)))
+    EC_mask_matrix = SpA.spdiagm([i => ones(N_mf - abs(i)) for i in -EC_idx_span:EC_idx_span]...)
   elseif params_in.EC_type == :super_gaussian
-    if N % 2 != 1
-      @warn("Using super gaussian echo chamber with even N, this breaks symmetry")
+    if N_mf % 2 != 1
+      @warn("Using super gaussian echo chamber with even N_mf, this breaks symmetry")
     end
     # define the mask matrix
-    EC_mask_matrix_full = zeros(N, N)
+    EC_mask_matrix_full = zeros(N_mf, N_mf)
 
     # compute the full mask centered at 0
     EC_mask = clip.(exp.(-(x .^ 2 / params_in.EC_ρ^2) .^ params_in.EC_power), params_in.EC_clip_value)
 
     # fill the matrix rowwise by shifting EC_mask
-    EC_mask_shift = div(N, 2) + 1
-    for i in 1:N
-      EC_mask_matrix_full[i, max(1, i + 1 - EC_mask_shift):min(N, i + N - EC_mask_shift)] =
-        EC_mask[max(1, EC_mask_shift - (i - 1)):min(N, N + EC_mask_shift - i)]
+    EC_mask_shift = div(N_mf, 2) + 1
+    for i in 1:N_mf
+      EC_mask_matrix_full[i, max(1, i + 1 - EC_mask_shift):min(N_mf, i + N_mf - EC_mask_shift)] =
+        EC_mask[max(1, EC_mask_shift - (i - 1)):min(N_mf, N_mf + EC_mask_shift - i)]
     end
 
-    use_sparse = sum(iszero, EC_mask) < 0.5 * (N - 1)
+    use_sparse = sum(iszero, EC_mask) < 0.5 * (N_mf - 1)
     if use_sparse
       EC_mask_matrix = SpA.sparse(EC_mask_matrix_full)
     else
@@ -429,7 +429,7 @@ function launch(params_in, store_path)
   if !params.constant_g
     if isnothing(params_in.g_init)
       g = [params_in.g_init_func_scaled(xi, xj) for xi in x, xj in x]
-      @assert size(g) == (params.N, params.N)
+      @assert size(g) == (params.N_mf, params.N_mf)
     else
       g = copy(params.g_init)
     end
@@ -439,7 +439,7 @@ function launch(params_in, store_path)
 
   i = 0
 
-  α_init = [params_in.α_init_func_scaled(x[i], x[j]) for i in 1:N, j in 1:N]
+  α_init = [params_in.α_init_func_scaled(x[i], x[j]) for i in 1:N_mf, j in 1:N_mf]
 
   if params.store
     if !isdir(params.store_path)
@@ -457,23 +457,23 @@ function launch(params_in, store_path)
   # Initial mass
   mass_init = δx * sum(f)
 
-  a = zeros(params.N)
-  a_prime = zeros(params.N)
-  µ, µC = zeros(params.N), zeros(params.N)
+  a = zeros(params.N_mf)
+  a_prime = zeros(params.N_mf)
+  µ, µC = zeros(params.N_mf), zeros(params.N_mf)
 
-  df = zeros(params.N)
+  df = zeros(params.N_mf)
   if !params.constant_g
-    dg = zeros(params.N, params.N)
+    dg = zeros(params.N_mf, params.N_mf)
   end
 
   compute_a!(a, a_prime, µ, µC, params, f, g)
   a_init = copy(a)
 
   if params.time_stepping == :RK4
-    RK4_f = zeros(params.N, 4)
-    RK4_df = zeros(params.N, 4)
-    RK4_g = zeros(params.N, params.N, 4)
-    RK4_dg = zeros(params.N, params.N, 4)
+    RK4_f = zeros(params.N_mf, 4)
+    RK4_df = zeros(params.N_mf, 4)
+    RK4_g = zeros(params.N_mf, params.N_mf, 4)
+    RK4_dg = zeros(params.N_mf, params.N_mf, 4)
   end
 
   ## Print parameters and plot initial conditions before starting

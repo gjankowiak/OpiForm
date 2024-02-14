@@ -108,7 +108,7 @@ function compute_ω_inf_mf(g_init_func_scaled, g_init_integral)
 end
 
 function fast_sampling!(A, α, n; symmetric::Bool=true, constant_α::Bool=false)
-  N = size(A, 1)
+  N_mf = size(A, 1)
 
   if !constant_α
 
@@ -133,10 +133,10 @@ function fast_sampling!(A, α, n; symmetric::Bool=true, constant_α::Bool=false)
         idx = rand(r)
       end
 
-      p, q = divrem(idx - 1, N)
+      p, q = divrem(idx - 1, N_mf)
       i, j = p + 1, q + 1
     else
-      i, j = rand(1:N), rand(1:N)
+      i, j = rand(1:N_mf), rand(1:N_mf)
     end
 
     if A[i, j] == 0
@@ -325,9 +325,12 @@ function scale_and_sample(α_init_func, f_init_poly_unscaled, connection_density
   if !full_adj_matrix
     g_sampling_result = OpiForm.sample_g_init(ops_init, f_init_func, α_init_func_scaled, connection_density, constant_α)
     adj_matrix = g_sampling_result.A
+    ω_inf_d_init = sum(vec(sum(adj_matrix; dims=2)) .* ops_init) / SpA.nnz(adj_matrix)
   else
     adj_matrix = nothing
+    ω_inf_d_init = sum(ops_init) / length(ops_init)
   end
+
 
   return (
     f_init_poly=f_init_poly,
@@ -337,7 +340,8 @@ function scale_and_sample(α_init_func, f_init_poly_unscaled, connection_density
     g_init=g_init,
     ops_init=ops_init,
     adj_matrix=adj_matrix,
-    ω_inf_mf_init=ω_inf_mf_init
+    ω_inf_mf_init=ω_inf_mf_init,
+    ω_inf_d_init=ω_inf_d_init
   )
 end
 
@@ -400,7 +404,7 @@ function prepare(params, mode)
       "connection_density" => params.connection_density,
       "delta_t" => params.δt,
       "flux" => string(params.flux),
-      "N" => params.N,
+      "N_mf" => params.N_mf,
       "N_discrete" => params.N_discrete
     )
     try

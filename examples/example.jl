@@ -12,7 +12,7 @@ function main(suffix)
   N = 301
   N_discrete = 1000
   δt = 1e-3
-  max_iter = 20_000
+  max_iter = 10_000
 
   ### Visualization ###
   plot_scale = identity
@@ -94,10 +94,10 @@ function main(suffix)
   # f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
   #
   # flatter symmetric bumps (chebyshev)
-  n_bumps = 2
-  chebyshev_coeffs = zeros(n_bumps * 2 + 1)
-  chebyshev_coeffs[end] = 1
-  f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+  # n_bumps = 2
+  # chebyshev_coeffs = zeros(n_bumps * 2 + 1)
+  # chebyshev_coeffs[end] = 1
+  # f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # asymmetric bumps (chebyshev)
   # n_bumps = 3
@@ -106,10 +106,10 @@ function main(suffix)
   # f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # flatter asymmetric bumps (chebyshev)
-  # n_bumps = 3
-  # chebyshev_coeffs = zeros(n_bumps * 2)
-  # chebyshev_coeffs[end] = 1
-  # f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+  n_bumps = 3
+  chebyshev_coeffs = zeros(n_bumps * 2)
+  chebyshev_coeffs[end] = 1
+  f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # more asymmetric bumps (chebyshev)
   # n_bumps = 3
@@ -212,7 +212,7 @@ function main(suffix)
 
   params = (
     # domain
-    N=N,
+    N_mf=N_mf,
     N_discrete=N_discrete,
     δt=δt,
     max_iter=max_iter,
@@ -307,7 +307,7 @@ suffix = "2_bumps_flatter"
 #          RUN          #
 #########################
 
-main(suffix)
+# main(suffix)
 
 #########################
 #         PLOT          #

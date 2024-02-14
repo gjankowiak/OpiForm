@@ -144,7 +144,7 @@ function plot_results(output_filename::String;
   set_makie_backend(:gl)
 
   warning = center_histogram ? " !!! The ω_i have been centered to ω_∞ (from MF initial data)" : ""
-  N = isempty(N_a) ? 300 : N_a[1]
+  N_mf = isempty(N_a) ? 300 : N_a[1]
 
   fig = M.Figure(size=(1920, 1080))
   ax1 = M.Axis(fig[1:4, 1])
@@ -224,13 +224,13 @@ function plot_results(output_filename::String;
 
     ext_ops = M.@lift [-1; 1; $obs_ops...]
 
-    M.hist!(ax1, ext_ops; bins=2 * N, normalization=:pdf)
+    M.hist!(ax1, ext_ops; bins=2 * N_mf, normalization=:pdf)
     M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
 
     if !isnothing(adj_matrix)
 
       # The size (width) of the hexagons, which we try to scale along the evolution
-      cs_obs = M.@lift 1.0 / N + 10.0 / ($obs_iter + 100)
+      cs_obs = M.@lift 1.0 / N_mf + 10.0 / ($obs_iter + 100)
 
       # The area of the hexagons A = sqrt(3) / 2 * width^2
       # https://en.wikipedia.org/wiki/Hexagon#Parameters (d = width in the article)
@@ -302,8 +302,8 @@ function plot_results(output_filename::String;
     #max_g_a = max(max_g_a, maximum(obs_fαf_a[1][]))
     obs_max_g_a[] = (0.0, 1.05 * max_g_a)
 
-    int_g = sum(obs_g_k[1][]) * (2 / N)^2
-    int_fαf = sum(obs_fαf_a[1][]) * (2 / N)^2
+    int_g = sum(obs_g_k[1][]) * (2 / N_mf)^2
+    int_fαf = sum(obs_fαf_a[1][]) * (2 / N_mf)^2
     ax2.title = "g(ω,m), ∫∫g = $(round(int_g; digits=3))"
     ax3.title = "fαf(ω,m), ∫∫fαf = $(round(int_fαf; digits=3))"
 
@@ -369,11 +369,11 @@ function compare_peak2peak(
 
     N_a = map(f -> size(f, 1), f_a)
 
-    function build_x(N)
-      δx = 2 / N
+    function build_x(N_mf)
+      δx = 2 / N_mf
       x_l, x_r = -1 + 0.5δx, 1 - 0.5δx
 
-      return range(x_l, x_r, length=N)
+      return range(x_l, x_r, length=N_mf)
     end
 
     x_a = map(build_x, N_a)

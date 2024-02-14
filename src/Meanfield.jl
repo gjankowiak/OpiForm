@@ -521,7 +521,8 @@ function launch(params_in, store_path)
         f .-= params.δt / params.δx * df
         if !params.constant_g
           if params.f_dependent_g
-            g .= 0.5params.N_discrete * f .* α_init .* f'
+            # DEFINITION G
+            g .= (f .* α_init .* f') ./ params.connection_density
           else
             g .-= params.δt / params.δx * dg
           end

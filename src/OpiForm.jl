@@ -23,6 +23,8 @@ import ShiftedArrays as SA
 
 import SparseArrays as SpA
 
+import LinearAlgebra as LA
+
 import Serialization
 
 import GLMakie
@@ -72,6 +74,11 @@ function sample_poly_dist(poly, n)
   scaled_I = I - I(-1)
   scaled_I = scaled_I / scaled_I(1)
 
+  # approximate extrema of the density
+  x = range(-1, 1, length=n)
+  fmin, fmax = extrema(poly.(x))
+  @info "min(f), max(f) ~ $fmin, $fmax"
+
   img_samples = rand(n)
 
   samples = sort(collect(map(x -> Roots.find_zero(scaled_I - x, (-1, 1), Roots.Bisection()), img_samples)))
@@ -91,8 +98,12 @@ function compute_ω_inf_mf(g_init_func_scaled, g_init_integral)
     return 0.0
   else
     @info "Computing g's first moment"
-    return (Cubature.pcubature(x -> x[1] * g_init_func_scaled(x[1], x[2]), [-1; -1], [1; 1])[1]) / g_init_integral
-    @info "Done"
+    # hack because Cubature sometimes stalls
+    # return (Cubature.pcubature(x -> x[1] * g_init_func_scaled(x[1], x[2]), [-1; -1], [1; 1])[1]) / g_init_integral
+    n = 1000
+    δx = 2 / n
+    x = range(-1 + 0.5δx, 1 - δx, length=n)
+    return (δx^2 * sum(x -> x[1] * g_init_func_scaled(x[1], x[2]), Iterators.product(x, x))) / g_init_integral
   end
 end
 
@@ -145,7 +156,7 @@ function fast_sampling!(A, α, n; symmetric::Bool=true, constant_α::Bool=false)
 end
 
 function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, connection_density, constant_α::Bool;
-  symmetric::Bool=true, fast::Bool=true)
+  symmetric::Bool=true, fast::Bool=true, zero_diagonal::Bool=false)
   N_discrete = length(f_samples)
   g_init_integral = connection_density * N_discrete
 
@@ -154,16 +165,22 @@ function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, conne
 
   if !constant_α
     # Compute all the couples g_init(ω_i, ω_j)
-    # FIXME: use the symmetry to speed up the computation
-    α_init_samples = [i == j ? 0.0 : α_init_func_scaled(f_samples[i], f_samples[j]) for i = 1:N_discrete, j = 1:N_discrete]
+    if zero_diagonal
+      α_init_samples = [i == j ? 0.0 : α_init_func_scaled(f_samples[i], f_samples[j]) for i = 1:N_discrete, j = 1:N_discrete]
+    else
+      α_init_samples = [α_init_func_scaled(f_samples[i], f_samples[j]) for i = 1:N_discrete, j = 1:N_discrete]
+    end
   else
-    α_init_samples = [i == j ? 0.0 : g_init_integral / 4 for i = 1:N_discrete, j = 1:N_discrete]
+    if zero_diagonal
+      α_init_samples = [i == j ? 0.0 : g_init_integral / 4 for i = 1:N_discrete, j = 1:N_discrete]
+    else
+      α_init_samples = [g_init_integral / 4 for i = 1:N_discrete, j = 1:N_discrete]
+    end
   end
 
   # DEFINITION G
   f_ops_samples = f_init_func_scaled.(f_samples)
-  g_init_samples = 0.5 * N_discrete * f_ops_samples .* α_init_samples .* f_ops_samples'
-
+  g_init_samples = f_ops_samples .* α_init_samples .* f_ops_samples' / connection_density
   sum_α_samples = sum(α_init_samples)
   sum_g_samples = sum(g_init_samples)
 
@@ -205,15 +222,19 @@ function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, conne
       tried += 1
 
       # we do not allow self-connection
+      if zero_diagonal && i == j
+        continue
+      end
+
       # we allow at most one connection
-      if i == j || A[i, j] > 0
+      if A[i, j] > 0
         continue
       end
 
       if constant_α || (rand() < α_init_samples(i, j) / sum_α_samples)
         A[i, j] = 1
         accepted += 1
-        if symmetric
+        if symmetric && i != j
           A[j, i] = 1
           tried += 1
           accepted += 1
@@ -242,7 +263,6 @@ function sample_g_init(f_samples, f_init_func_scaled, α_init_func_scaled, conne
   @info "Adjacency matrix:\n" * string(UnicodePlots.spy(reverse(A; dims=1); width=80, height=30))
 
   @info "Heat map, g_init(ω_i, ω_j):"
-  @show extrema(g_init_samples)
   println(UnicodePlots.heatmap(g_init_samples; width=80, height=80))
 
   if !Graphs.is_connected(Graphs.SimpleGraph(A))
@@ -273,6 +293,52 @@ function check_sampling(samples, P; use_makie=false)
     M.hist!(ax, samples; bins=100, normalization=:pdf)
     display(fig)
   end
+end
+
+function scale_and_sample(α_init_func, f_init_poly_unscaled, connection_density, N_discrete::Int, constant_α::Bool, full_adj_matrix::Bool)
+  if !constant_α
+    _α = α_init_func
+  else
+    _α = (_) -> connection_density
+  end
+
+  f_init_poly = OpiForm.scale_poly(f_init_poly_unscaled)
+
+  f_init_func(x) = f_init_poly(x)
+
+  # DEFINITION G
+  g_init_unscaled_uni = (x -> _α(x) * f_init_func(x[1]) * f_init_func(x[2]) / connection_density)
+  g_prefactor = OpiForm.scale_g_init(g_init_unscaled_uni, 1.0)
+  α_init_func_scaled = (ω, m) -> g_prefactor * _α([ω, m])
+  # DEFINITION_G
+  g_init_func_scaled = (ω, m) -> α_init_func_scaled(ω, m) * f_init_func(ω) * f_init_func(m) / connection_density
+
+  ω_inf_mf_init = OpiForm.compute_ω_inf_mf(g_init_func_scaled, 1.0)
+
+  # if g_init is nothing, it will be evaluated from g_init_func_scaled
+  g_init = nothing
+
+  ### ops_init ###
+  ops_init = OpiForm.sample_poly_dist(f_init_poly, N_discrete)
+
+  ### adj_matrix ###
+  if !full_adj_matrix
+    g_sampling_result = OpiForm.sample_g_init(ops_init, f_init_func, α_init_func_scaled, connection_density, constant_α)
+    adj_matrix = g_sampling_result.A
+  else
+    adj_matrix = nothing
+  end
+
+  return (
+    f_init_poly=f_init_poly,
+    f_init_func=f_init_func,
+    α_init_func_scaled=α_init_func_scaled,
+    g_init_func_scaled=g_init_func_scaled,
+    g_init=g_init,
+    ops_init=ops_init,
+    adj_matrix=adj_matrix,
+    ω_inf_mf_init=ω_inf_mf_init
+  )
 end
 
 function prepare(params, mode)

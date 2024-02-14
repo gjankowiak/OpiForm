@@ -77,8 +77,6 @@ function main(suffix)
 
   #### f_init_func NEEDS TO BE NORMALIZED ####
 
-  PP = Polynomials.Polynomial
-
   # centered bump
   #f_init_poly_unscaled = PP([1.0, -1.0]) * PP([1, 1])
   # @show f_init_poly
@@ -94,11 +92,12 @@ function main(suffix)
   # chebyshev_coeffs = zeros(n_bumps * 2 + 1)
   # chebyshev_coeffs[end] = 1
   # f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
-
-  # function f_init_func(x)
-  #   return f_init_poly(x)
-  # end
-
+  #
+  # flatter symmetric bumps (chebyshev)
+  n_bumps = 2
+  chebyshev_coeffs = zeros(n_bumps * 2 + 1)
+  chebyshev_coeffs[end] = 1
+  f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # asymmetric bumps (chebyshev)
   # n_bumps = 3
@@ -106,19 +105,20 @@ function main(suffix)
   # chebyshev_coeffs[end] = 1
   # f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
+  # flatter asymmetric bumps (chebyshev)
+  # n_bumps = 3
+  # chebyshev_coeffs = zeros(n_bumps * 2)
+  # chebyshev_coeffs[end] = 1
+  # f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+
   # more asymmetric bumps (chebyshev)
-  n_bumps = 3
-  chebyshev_coeffs = zeros(n_bumps * 2)
-  chebyshev_coeffs[1] = -1
-  chebyshev_coeffs[2] = 1
-  chebyshev_coeffs[end] = 1
+  # n_bumps = 3
+  # chebyshev_coeffs = zeros(n_bumps * 2)
+  # chebyshev_coeffs[1] = -1
+  # chebyshev_coeffs[2] = 1
+  # chebyshev_coeffs[end] = 1
 
-  f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
-  f_init_poly = OpiForm.scale_poly(f_init_poly_unscaled)
-
-  function f_init_func(x)
-    return f_init_poly(x)
-  end
+  #f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # Cosine
   # f_init_func = x -> 0.3 * (1e-3 + cos(2 * π * x))
@@ -149,10 +149,6 @@ function main(suffix)
   # set g = c f(ω) α(ω,m) f(m), i.e. do not consider g as an independent unknown
   f_dependent_g = false
 
-  # center the initial value of ops on ω_inf_mf
-  # will probably fail if f is non zero at the boundary
-  center_ops = false
-
   # Density of the connections
   # g_init will be normalized so that
   # ∫g = λ (see the overleaf file),
@@ -167,53 +163,11 @@ function main(suffix)
   function α_init_func(x::Vector{Float64})
     ω, m = x
     stddev = 0.3
-    r = exp(-(ω - m)^2 / stddev^2) + 0.2
+    r = exp(-(ω - m)^2 / stddev^2) + 0.4
     return r
   end
 
-  if !constant_α
-    _α = α_init_func
-  else
-    _α = (x) -> connection_density
-  end
-
-  ###########################################################################################################
-  #                        YOU PROBABLY SHOULD NOT TOUCH THE BLOCK BELOW                                    #
-  ###########################################################################################################
-
-  # DEFINITION G
-  g_init_unscaled_uni = (x -> _α(x) * f_init_func(x[1]) * f_init_func(x[2]) / connection_density)
-  g_prefactor = OpiForm.scale_g_init(g_init_unscaled_uni, 1.0)
-  α_init_func_scaled = (ω, m) -> g_prefactor * _α([ω, m])
-  # DEFINITION_G
-  g_init_func_scaled = (ω, m) -> α_init_func_scaled(ω, m) * f_init_func(ω) * f_init_func(m) / connection_density
-
-  ω_inf_mf_init = OpiForm.compute_ω_inf_mf(g_init_func_scaled, 1.0)
-
-  # if g_init is nothing, it will be evaluated from g_init_func_scaled
-  g_init = nothing
-
-  ### ops_init ###
-  ops_init = OpiForm.sample_poly_dist(f_init_poly, N_discrete)
-
-  if center_ops
-    ops_init .+= ω_inf_mf_init - sum(ops_init) / length(ops_init)
-  end
-
-  ### adj_matrix ###
-  if !full_adj_matrix
-    g_sampling_result = OpiForm.sample_g_init(ops_init, f_init_func, α_init_func_scaled, connection_density, constant_α)
-    adj_matrix = g_sampling_result.A
-  else
-    adj_matrix = nothing
-  end
-
-
-  #
-  ###########################################################################################################
-  #                                                                                                         #
-  ###########################################################################################################
-
+  sas_result = OpiForm.scale_and_sample(α_init_func, f_init_poly_unscaled, connection_density, N_discrete, constant_α, full_adj_matrix)
 
   ### Solver ###
   # Choice of flux:
@@ -292,23 +246,22 @@ function main(suffix)
 
     ### Continuous model
     ### f
-    f_init_poly=f_init_poly,
-    f_init_func=f_init_func,
+    f_init_poly=sas_result.f_init_poly,
+    f_init_func=sas_result.f_init_func,
     ### g
-    g_init_func_scaled=g_init_func_scaled,
-    α_init_func_scaled=α_init_func_scaled,
-    g_init=g_init,
+    g_init_func_scaled=sas_result.g_init_func_scaled,
+    α_init_func_scaled=sas_result.α_init_func_scaled,
+    g_init=sas_result.g_init,
     f_dependent_g=f_dependent_g,
     constant_α=constant_α, # if true, then g = 1 (modulo normalization). Overrides g_init.
     constant_g=constant_g, # legacy parameter, unused, should be false
-    center_ops=center_ops,
-    ω_inf_mf_init=ω_inf_mf_init,
+    ω_inf_mf_init=sas_result.ω_inf_mf_init,
 
     ### Discrete model
     full_adj_matrix=full_adj_matrix,
     ### u
-    ops_init=ops_init,
-    adj_matrix=adj_matrix,
+    ops_init=sas_result.ops_init,
+    adj_matrix=sas_result.adj_matrix,
 
     # visualization
     plot_scale=plot_scale, # can be :log10
@@ -339,18 +292,22 @@ function main(suffix)
   store_path = "results/test_meanfield_" * suffix
   OpiForm.MeanField.launch(params_lLF, store_path)
 
+  params_lLF_fdg = merge(params, (flux=:lLF, f_dependent_g=true))
+  store_path = "results/test_meanfield_fdg_" * suffix
+  OpiForm.MeanField.launch(params_lLF_fdg, store_path)
+
   store_path = "results/test_discrete_" * suffix
   OpiForm.Discrete.launch(params, store_path)
 
 end
 
-suffix = "3_bumps"
+suffix = "2_bumps_flatter"
 
 #########################
 #          RUN          #
 #########################
 
-main(suffix)
+# main(suffix)
 
 #########################
 #         PLOT          #
@@ -358,10 +315,20 @@ main(suffix)
 
 # Movie
 
-OpiForm.plot_result("test_$(suffix).mp4";
+# OpiForm.plot_result("test_$(suffix).mp4";
+#   meanfield_dir="results/test_meanfield_" * suffix,
+#   discrete_dir="results/test_discrete_" * suffix,
+#   half_connection_matrix=true,
+#   center_histogram=false
+# )
+
+# Movie with centered histogram
+
+OpiForm.plot_result("test_$(suffix)_centered_histogram.mp4";
   meanfield_dir="results/test_meanfield_" * suffix,
   discrete_dir="results/test_discrete_" * suffix,
-  half_connection_matrix=true
+  half_connection_matrix=true,
+  center_histogram=true
 )
 
 # Comvergence plots
@@ -369,6 +336,7 @@ OpiForm.plot_result("test_$(suffix).mp4";
 OpiForm.compare_peak2peak(
   [
     "results/test_meanfield_" * suffix,
+    "results/test_meanfield_fdg_" * suffix,
   ], [
     "results/test_discrete_" * suffix,
   ]

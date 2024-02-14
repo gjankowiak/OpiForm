@@ -1,5 +1,5 @@
-function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64, cutoff_iter=5000)
-  idc = searchsortedfirst(i_a, cutoff_iter)
+function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64, cutoff_time=5)
+  idc = searchsortedfirst(i_a * δt, cutoff_time)
   return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
 end
 
@@ -46,6 +46,7 @@ function plot_results(output_filename::String;
     labels = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
     i_mf_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
     f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
+    params_mf_a = map(load_metadata, meanfield_dirs)
 
     α_init_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "α_init"), meanfield_dirs)
 
@@ -74,13 +75,6 @@ function plot_results(output_filename::String;
 
     constant_g = isnothing(obs_g_k[1][])
 
-    function build_x(N)
-      δx = 2 / N
-      x_l, x_r = -1 + 0.5δx, 1 - 0.5δx
-
-      return range(x_l, x_r, length=N)
-    end
-
     x_a = map(build_x, N_a)
   end
 
@@ -90,6 +84,7 @@ function plot_results(output_filename::String;
     i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "i"), discrete_dirs)
     adj_matrix_full = load_hdf5_data(joinpath(discrete_dir, "data_discrete.h5"), "adj_matrix")
     adj_matrix = isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full)
+    params_d_a = map(load_metadata, discrete_dirs)
     N_discrete = size(ops, 1)
     if !isnothing(adj_matrix)
       @assert SpA.is_hermsym(adj_matrix, identity)
@@ -100,9 +95,11 @@ function plot_results(output_filename::String;
       ω_inf_d = sum(ops[:, 1] .* sharp_I) ./ sum(sharp_I)
       xs = Vector{Float64}(undef, adj_matrix_nnz)
       ys = Vector{Float64}(undef, adj_matrix_nnz)
+      ones_vector_d = ones(adj_matrix_nnz)
 
       obs_xs = M.Observable(view(xs, 1:adj_matrix_nnz))
       obs_ys = M.Observable(view(ys, 1:adj_matrix_nnz))
+      obs_ones_vector_d = M.Observable(view(ones_vector_d, 1:adj_matrix_nnz))
 
       function get_xy(opis)
         rows = SpA.rowvals(adj_matrix)
@@ -114,7 +111,7 @@ function plot_results(output_filename::String;
           if half_connection_matrix
             opis_x = view(opis, rows[nzr])
 
-            idc = opis_x .> opis[j]
+            idc = opis_x .>= opis[j]
             nnz_in_col = length(filter(isone, idc))
 
             xs[got+1:got+nnz_in_col] .= opis_x[idc]
@@ -129,14 +126,10 @@ function plot_results(output_filename::String;
           end
         end
 
-        # if center_histogram
-        #   @. xs += ω_inf_mf_a[1] - ω_inf_d
-        #   @. ys += ω_inf_mf_a[1] - ω_inf_d
-        # end
-
         if half_connection_matrix
           obs_xs[] = view(xs, 1:got)
           obs_ys[] = view(ys, 1:got)
+          obs_ones_vector_d[] = view(ones_vector_d, 1:got)
         end
 
       end
@@ -164,16 +157,17 @@ function plot_results(output_filename::String;
     ax3 = M.Axis(fig[1:4, 3], aspect=1)
     ax3.title = "f α f"
 
-    g_bottom = fig[5, 1:3] = M.GridLayout()
+    g_bottom_left = fig[5, 1:1] = M.GridLayout()
+    g_bottom_right = fig[5, 2:3] = M.GridLayout()
   else
-    g_bottom = fig[5, 1:2] = M.GridLayout()
+    g_bottom_left = fig[5, 1:1] = M.GridLayout()
+    g_bottom_right = fig[5, 2:2] = M.GridLayout()
   end
-
-
 
   if has_mf
     obs_f_a = [M.@lift f_a[k][:, $obs_i] for k in 1:K_mf]
-    obs_fαf_a = [M.@lift 0.5 * N_discrete_mf_a[k] * f_a[k][:, $obs_i] .* α_init_a[k] .* f_a[k][:, $obs_i]' for k in 1:K_mf]
+    # DEFINITION G
+    obs_fαf_a = [M.@lift f_a[k][:, $obs_i] .* α_init_a[k] .* f_a[k][:, $obs_i]' / params_mf_a[k]["connection_density"] for k in 1:K_mf]
 
     function find_support(f_a)
       left_idc = map(f -> (idx = findfirst(x -> x > 1e-5, f[]); return (isnothing(idx) ? 1 : idx)), f_a)
@@ -195,20 +189,27 @@ function plot_results(output_filename::String;
 
     if !constant_g
       obs_gff_a = [M.Observable(obs_g_k[k][]) for k in 1:K_mf]
+      max_g_a = maximum(obs_gff_a[1][])
+    else
+      max_g_a = 0.0
     end
+
+    #max_g_a = max(max_g_a, maximum(obs_fαf_a[1][]))
+    obs_max_g_a = M.Observable((0.0, 1.05 * max_g_a))
 
     for k in 1:K_mf
       M.lines!(ax1, x_a[k], obs_f_a[k], label=labels[k])
 
-      #M.barplot!(ax3, x_a[k], obs_f_a[k], gap=0)
-
       if !constant_g
-        M.heatmap!(ax2, x_a[k], x_a[k], obs_gff_a[k])
+        M.heatmap!(ax2, x_a[k], x_a[k], obs_gff_a[k], colorrange=obs_max_g_a, colormap=:ice)
+        if k == 1
+        end
       end
-      M.heatmap!(ax3, x_a[k], x_a[k], obs_fαf_a[k])
+      hm = M.heatmap!(ax3, x_a[k], x_a[k], obs_fαf_a[k], colorrange=obs_max_g_a, colormap=:ice)
+      M.Colorbar(fig[5, 2:2], hm; vertical=false)
     end
 
-    legend = M.Legend(g_bottom[1, 1], ax1)
+    legend = M.Legend(g_bottom_left[1, 1], ax1)
 
   end
 
@@ -220,13 +221,43 @@ function plot_results(output_filename::String;
     end
     obs_extrema_ops = M.@lift extrema($obs_ops)
 
-    M.hist!(ax1, obs_ops; bins=50, normalization=:pdf)
+    ext_ops = M.@lift [-1; 1; $obs_ops...]
+
+    M.hist!(ax1, ext_ops; bins=2 * 300, normalization=:pdf)
     M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
-    # M.hist!(ax3, obs_ops; bins=50, normalization=:pdf)
-    # M.vlines!(ax3, ω_inf_d, color=:grey, ls=0.5)
 
     if !isnothing(adj_matrix)
-      M.scatter!(ax2, obs_xs, obs_ys, alpha=0.0005, markersize=4, color=:black, strokewidth=0.05, transparency=true)
+
+      # The size (width) of the hexagons, which we try to scale along the evolution
+      cs_obs = M.@lift 1.0 / 300 + 10.0 / ($obs_iter + 100)
+
+      # The area of the hexagons A = sqrt(3) / 2 * width^2
+      # https://en.wikipedia.org/wiki/Hexagon#Parameters (d = width in the article)
+      hex_area = M.@lift 0.5 * sqrt(3) * ($cs_obs)^2
+
+      # Scale the number of observations per hexagon to match g
+      # If the distribution is homogeneous, we have
+      # avg_obs = adj_matrix_nnz * A / |Ω²| particles per cell (hexagon)
+      # This should correspond to the average value of g, ie ∫∫g/|Ω²|
+      # So the correct mapping from number of observation per cell to value is
+      # i -> i / avg_obs * ∫∫g/|Ω²| = i/(adj_matrix_nnz * A)
+      obs_particle_weight = M.@lift 1 / ($hex_area * adj_matrix_nnz)
+      obs_particle_weight_rounded = M.@lift round($obs_particle_weight; digits=3)
+      weights = M.@lift $obs_particle_weight * $obs_ones_vector_d
+
+      hb = M.hexbin!(ax2, obs_xs, obs_ys,
+        cellsize=cs_obs, strokewidth=0.5, strokecolor=:gray75, threshold=1,
+        #colormap=:ice,
+        colormap=[M.to_color(:transparent); M.to_colormap(:ice)],
+        weights=weights, colorrange=obs_max_g_a)
+      hb = M.hexbin!(ax3, obs_xs, obs_ys,
+        cellsize=cs_obs, strokewidth=0.5, strokecolor=:white, threshold=1,
+        #colormap=:ice,
+        colormap=[M.to_color(:transparent); M.to_colormap(:ice)],
+        weights=weights, colorrange=obs_max_g_a)
+
+      M.Colorbar(fig[5, 3:3], hb; vertical=false)
+
       M.limits!(ax2, (-1, 1), (-1, 1))
       M.limits!(ax3, (-1, 1), (-1, 1))
     end
@@ -235,6 +266,7 @@ function plot_results(output_filename::String;
   i_range = enumerate(i_mf_a[1])
 
   function step_i(tuple)
+
     i, iter = tuple
 
     pct = lpad(Int(round(100 * i / length(i_range))), 3, " ")
@@ -261,15 +293,24 @@ function plot_results(output_filename::String;
       for k in 1:K_mf
         obs_gff_a[k][] = obs_g_k[k][]
       end
+      max_g_a = maximum(obs_gff_a[1][])
+    else
+      max_g_a = 0.0
     end
+
+    #max_g_a = max(max_g_a, maximum(obs_fαf_a[1][]))
+    obs_max_g_a[] = (0.0, 1.05 * max_g_a)
+
+    int_g = sum(obs_g_k[1][]) * (2 / 301)^2
+    int_fαf = sum(obs_fαf_a[1][]) * (2 / 301)^2
+    ax2.title = "g(ω,m), ∫∫g = $(round(int_g; digits=3))"
+    ax3.title = "fαf(ω,m), ∫∫fαf = $(round(int_fαf; digits=3))"
 
     if has_mf
       support = find_support(obs_f_a)
       max_f = find_max(obs_f_a)
       M.ylims!(ax1, low=-1, high=1.3 * max_f)
       M.xlims!(ax1, low=support.left, high=support.right)
-      # M.xlims!(ax3, low=support.left, high=support.right)
-      # M.ylims!(ax3, low=-1, high=1.3 * max_f)
 
       M.xlims!(ax2, low=support.left, high=support.right)
       M.ylims!(ax2, low=support.left, high=support.right)
@@ -279,8 +320,6 @@ function plot_results(output_filename::String;
 
     else
       M.autolimits!(ax1)
-      # M.autolimits!(ax3)
-      # M.xlims!(ax3, low=obs_extrema_ops[][:left], high=obs_extrema_ops[][:right])
     end
 
   end
@@ -383,11 +422,11 @@ function compare_peak2peak(
   set_makie_backend(:gl)
 
   fig = M.Figure(size=(1920, 1080))
-  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="iterations", title=M.L"\max_i\;\omega_i - \min_i\;\omega_i")
-  ax2 = M.Axis(fig[1, 2], xlabel="iterations", title=M.L"\omega_\inf \quad \min_i\; \omega_i \quad \max_i\; \omega_i")
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title=M.L"\max_i\;\omega_i - \min_i\;\omega_i")
+  ax2 = M.Axis(fig[1, 2], xlabel="time", title=M.L"\omega_\inf \quad \min_i\; \omega_i \quad \max_i\; \omega_i")
 
   for k in 1:K_d
-    r = i_d_a[k]
+    r = i_d_a[k] * params_d_a[k]["delta_t"]
     p2p = p2p_d_a[k]
     M.lines!(ax1, r, p2p, label=labels_d[k] * " rate: $(round(rates_d_a[k]; digits=3))")
 
@@ -399,7 +438,7 @@ function compare_peak2peak(
 
   for k in 1:K_mf
     p2p = support_width_mf_a[k]
-    r = i_mf_a[k]
+    r = i_mf_a[k] * params_mf_a[k]["delta_t"]
     M.lines!(ax1, r, p2p, label=labels_mf[k] * " rate: $(round(rates_mf_a[k]; digits=3))")
 
     M.hlines!(ax2, params_mf_a[k]["omega_inf_mf"])

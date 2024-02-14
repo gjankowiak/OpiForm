@@ -107,6 +107,13 @@ function speyes(N, n_groups)
   end
 end
 
+function build_x(N)
+  δx = 2 / N
+  x_l, x_r = -1 + 0.5δx, 1 - 0.5δx
+
+  return range(x_l, x_r, length=N)
+end
+
 function load_hdf5_data(filename::String, key::String)
   data = HDF5.h5open(filename)
   try

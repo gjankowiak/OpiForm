@@ -307,7 +307,7 @@ suffix = "2_bumps_flatter"
 #          RUN          #
 #########################
 
-# main(suffix)
+main(suffix)
 
 #########################
 #         PLOT          #

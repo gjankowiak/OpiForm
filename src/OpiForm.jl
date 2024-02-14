@@ -400,6 +400,7 @@ function prepare(params, mode)
       "connection_density" => params.connection_density,
       "delta_t" => params.δt,
       "flux" => string(params.flux),
+      "N" => params.N,
       "N_discrete" => params.N_discrete
     )
     try

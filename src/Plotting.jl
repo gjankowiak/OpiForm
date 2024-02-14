@@ -1,4 +1,4 @@
-function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time=5)
+function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
   idc = searchsortedfirst(i_a * δt, cutoff_time)
   return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
 end
@@ -144,6 +144,7 @@ function plot_results(output_filename::String;
   set_makie_backend(:gl)
 
   warning = center_histogram ? " !!! The ω_i have been centered to ω_∞ (from MF initial data)" : ""
+  N = isempty(N_a) ? 300 : N_a[1]
 
   fig = M.Figure(size=(1920, 1080))
   ax1 = M.Axis(fig[1:4, 1])
@@ -223,13 +224,13 @@ function plot_results(output_filename::String;
 
     ext_ops = M.@lift [-1; 1; $obs_ops...]
 
-    M.hist!(ax1, ext_ops; bins=2 * 300, normalization=:pdf)
+    M.hist!(ax1, ext_ops; bins=2 * N, normalization=:pdf)
     M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
 
     if !isnothing(adj_matrix)
 
       # The size (width) of the hexagons, which we try to scale along the evolution
-      cs_obs = M.@lift 1.0 / 300 + 10.0 / ($obs_iter + 100)
+      cs_obs = M.@lift 1.0 / N + 10.0 / ($obs_iter + 100)
 
       # The area of the hexagons A = sqrt(3) / 2 * width^2
       # https://en.wikipedia.org/wiki/Hexagon#Parameters (d = width in the article)
@@ -301,8 +302,8 @@ function plot_results(output_filename::String;
     #max_g_a = max(max_g_a, maximum(obs_fαf_a[1][]))
     obs_max_g_a[] = (0.0, 1.05 * max_g_a)
 
-    int_g = sum(obs_g_k[1][]) * (2 / 301)^2
-    int_fαf = sum(obs_fαf_a[1][]) * (2 / 301)^2
+    int_g = sum(obs_g_k[1][]) * (2 / N)^2
+    int_fαf = sum(obs_fαf_a[1][]) * (2 / N)^2
     ax2.title = "g(ω,m), ∫∫g = $(round(int_g; digits=3))"
     ax3.title = "fαf(ω,m), ∫∫fαf = $(round(int_fαf; digits=3))"
 
@@ -382,7 +383,7 @@ function compare_peak2peak(
     support_bounds_mf_a = find_support_bounds(f_a, x_a)
     support_width_mf_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mf_a]
 
-    rates_mf_a = [compute_p2p_rate(i_mf_a[k], support_width_mf_a[k], params_mf_a[k]["delta_t"]; cutoff_time=0.25 * params_mf_a[k]["delta_t"] * i_mf_a[end]) for k in 1:K_mf]
+    rates_mf_a = [compute_p2p_rate(i_mf_a[k], support_width_mf_a[k], params_mf_a[k]["delta_t"]; cutoff_time=0.25 * params_mf_a[k]["delta_t"] * i_mf_a[k][end]) for k in 1:K_mf]
 
     g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g_M1"), meanfield_dirs)
 
@@ -416,7 +417,7 @@ function compare_peak2peak(
     ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
     p2p_d_a = [peak2peak(ops; dims=1) for ops in ops_a]
     extrema_d_a = [extrema(ops; dims=1) for ops in ops_a]
-    rates_d_a = [compute_p2p_rate(i_d_a[k], p2p_d_a[k], params_d_a[k]["delta_t"]; cutoff_time=0.25 * params_d_a[k]["delta_t"] * i_d_a[end]) for k in 1:K_d]
+    rates_d_a = [compute_p2p_rate(i_d_a[k], p2p_d_a[k], params_d_a[k]["delta_t"]; cutoff_time=0.25 * params_d_a[k]["delta_t"] * i_d_a[k][end]) for k in 1:K_d]
 
   end
 

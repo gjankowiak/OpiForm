@@ -8,78 +8,59 @@ function main(suffix)
   #      PARAMETERS       #
   #########################
 
-  ### Discretization ###
+  ### DISCRETIZATION ###
   N = 301
   N_discrete = 1000
   δt = 1e-3
   max_iter = 10_000
 
-  ### Visualization ###
-  plot_scale = identity
-  plot_every = 10
-  plot_backend = :makie
+  ### INITIALIZATION ###
 
-  # Storage
-  store = true
-  store_overwrite = false
-  store_every_iter = 10
+  # Method
+  # :micro
+  # :mfl
+  init_method = :micro
 
-  ### Model ###
-  # σ = 0.0 => Echo chambers only
-  # σ = 1.0 => Epistemic bubbles only
-  σ = 1.0
+  ## INITIALIZATION: MICRO ##
 
-  # Echo chamber type
-  # :characteristic, original model, uses 1_{|ω-m| < EC_ρ}(m)
-  # :super_gaussian, uses clip(exp(- (|ω-m|²/EC_ρ)^EC_power), EC_clip_value)
-  #                  where clip(x,v) = x if x > v, 0 otherwise
-  # Note that :super_gaussian approximates :characteristic as EC_power → ∞ and EC_clip_value → 0
-  EC_type = :super_gaussian
+  # Required fields: init_micro_graph_type, init_micro_args
 
-  # Echo chamber radius
-  EC_ρ = 2e-1
+  # Micro graph type and args, see
+  # https://juliagraphs.org/Graphs.jl/dev/core_functions/simplegraphs_generators
+  # Required for init_method = micro, set to nothing otherwise
+  # for possible values and arguments
+  # :dorogovtsev_mendes
+  # :barabasi_albert
+  # :erdos_renyi
+  # :barbell_graph
 
-  # Echo chamber super-gaussian parameters
-  EC_power = 3.0
-  EC_clip_value = 0.0
+  init_micro_graph_type = dorogovtsev_mendes
+  init_micro_args = (n,)
 
-  normalize_chambers = false
+  # init_micro_graph_types = barabasi_albert
+  # init_micro_args = (n, k)
+  #
+  # init_micro_graph_types = erdos_renyi
+  # init_micro_args = (n, d)
+  #
+  # init_micro_graph_types = barbell_graph
+  # init_micro_args = (n - n ÷ 2, n ÷ 2)
 
-  ## Debate kernel (for epistemic bubbles)
-  D_kern_factor = 1.0
-  # D_kern = (ω, m) -> -D_kern_factor * exp(-abs(ω - m)) * sign(ω - m)
-  function D_func(distance)
-    return -D_kern_factor * distance
-  end
-  function D_kern(ω, m)
-    return D_func(ω - m)
-  end
-
-  # Radicalization kernel (ie attractive term for echo chambers)
-  R_kern_factor = 1.0
-  function R_func(distance)
-    return -R_kern_factor * distance
-  end
-  function R_kern(ω, m)
-    return R_func(ω - m)
-  end
-
-  # Polarization kernel (ie repulsive term for echo chambers)
-  P_kern_factor = 1.0
-  function P_func(distance)
-    return P_kern_factor * distance
-  end
-  function P_kern(ω, m)
-    return P_func(ω - m)
-  end
-
-  ### Initial conditions ###
-
-  #### f_init_func NEEDS TO BE NORMALIZED ####
+  ## INITIALIZATION: MFL ##
+  #
+  # Required fields:
+  # - f_init_poly_unscaled::T <: Polynomial
+  # - α_init_func::Function(x::Vector{Float64})
+  # - connection_density::Real
+  #
+  # Optional fields:
+  # - constant_α::Bool=false
+  # - constant_g::Bool=false
+  # - full_adj_matrix::Bool=false
+  # - f_dependent_g::Bool=false
 
   # centered bump
   #f_init_poly_unscaled = PP([1.0, -1.0]) * PP([1, 1])
-  # @show f_init_poly
 
   # side bump
   #f_init_poly = 0
@@ -135,7 +116,7 @@ function main(suffix)
   # Step
   # f_init_func = x -> (2 + round(2 * x)) * (x < 0)
 
-  #### α (connectivity discribution) ####
+  #### Α (CONNECTIVITY DISCRIBUTION) ####
 
   # use a constant α for the initialization, it will be scaled for you
   constant_α = false
@@ -169,7 +150,67 @@ function main(suffix)
 
   sas_result = OpiForm.scale_and_sample(α_init_func, f_init_poly_unscaled, connection_density, N_discrete, constant_α, full_adj_matrix)
 
-  ### Solver ###
+
+  ### VISUALIZATION ###
+  plot_scale = identity
+  plot_every = 10
+  plot_backend = :makie
+
+  # Storage
+  store_overwrite = false
+  store_every_iter = 10
+
+  ### MODEL ###
+  # σ = 0.0 => Echo chambers only
+  # σ = 1.0 => Epistemic bubbles only
+  σ = 1.0
+
+  # Echo chamber type
+  # :characteristic, original model, uses 1_{|ω-m| < EC_ρ}(m)
+  # :super_gaussian, uses clip(exp(- (|ω-m|²/EC_ρ)^EC_power), EC_clip_value)
+  #                  where clip(x,v) = x if x > v, 0 otherwise
+  # Note that :super_gaussian approximates :characteristic as EC_power → ∞ and EC_clip_value → 0
+  EC_type = :super_gaussian
+
+  # Echo chamber radius
+  EC_ρ = 2e-1
+
+  # Echo chamber super-gaussian parameters
+  EC_power = 3.0
+  EC_clip_value = 0.0
+
+  normalize_chambers = false
+
+  ## Debate kernel (for epistemic bubbles)
+  D_kern_factor = 1.0
+  # D_kern = (ω, m) -> -D_kern_factor * exp(-abs(ω - m)) * sign(ω - m)
+  function D_func(distance)
+    return -D_kern_factor * distance
+  end
+  function D_kern(ω, m)
+    return D_func(ω - m)
+  end
+
+  # Radicalization kernel (ie attractive term for echo chambers)
+  R_kern_factor = 1.0
+  function R_func(distance)
+    return -R_kern_factor * distance
+  end
+  function R_kern(ω, m)
+    return R_func(ω - m)
+  end
+
+  # Polarization kernel (ie repulsive term for echo chambers)
+  P_kern_factor = 1.0
+  function P_func(distance)
+    return P_kern_factor * distance
+  end
+  function P_kern(ω, m)
+    return P_func(ω - m)
+  end
+
+
+  ### SOLVER ###
   # Choice of flux:
   # :LF (Lax-Friedrich)
   # :lLF (local Lax-Friedrich)

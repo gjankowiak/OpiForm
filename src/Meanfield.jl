@@ -5,7 +5,8 @@ import HDF5
 
 import Graphs: SimpleGraph, is_connected, connected_components
 
-import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare, issymmetric, symmetry_defect, @fmt, @left, @right
+import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare_directory, issymmetric, symmetry_defect,
+  build_x, load_hdf5_data, store_hdf5_data, @fmt, @left, @right
 
 function check_connected(M::Array{Int64,2})
   g = SimpleGraph(M)
@@ -25,9 +26,6 @@ function minmod(a, b)
   r = @. 0.5 * (sign(a) + sign(b)) * min(abs(a), abs(b))
   @assert !(r .|> isnan |> any) "\n minmod:NaN result!"
   return r
-end
-
-function superbee(a, b)
 end
 
 function compute_df!(dst, params::NamedTuple, f, a, a_prime)
@@ -335,24 +333,22 @@ function display_params(params::NamedTuple)
   @info r
 end
 
-function launch(params_in, store_path)
-
+function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   if params_in.constant_g
     @warn "Parameter constant_g is deprecated!"
   end
 
-  prepare(merge(params_in, (store_path=store_path,)), :meanfield)
+  prepare_directory(store_dir, params_in, :mfl, force=force)
 
   # Domain parameters
+  # FIXME: this is not used consistently
   Ω_left, Ω_right = -1, 1
   Ω_width = Ω_right - Ω_left
 
   N_mfl = params_in.N_mfl
-  δx = Ω_width / N_mfl
 
-  x_l, x_r = Ω_left + 0.5δx, Ω_right - 0.5δx
-
-  x = collect(range(x_l, x_r, N_mfl))
+  x = build_x(N_mfl)
+  δx = x[2] - x[1]
 
   # Model parameters
   if params_in.constant_a
@@ -404,13 +400,7 @@ function launch(params_in, store_path)
   # will have their inverse treated as zero.
   int_threshold = 1e-10
 
-  f_init = params_in.f_init_func.(x)
-  # normalization
-  f_init /= (δx * sum(f_init))
-
   params = merge(params_in, (
-    store_path=store_path,
-
     # domain
     Ω_left=Ω_left,
     Ω_right=Ω_right,
@@ -424,34 +414,29 @@ function launch(params_in, store_path)
     int_threshold=int_threshold,
   ))
 
-
+  f_init = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "f_init")
   f = copy(f_init)
   if !params.constant_g
-    if isnothing(params_in.g_init)
-      g = [params_in.g_init_func_scaled(xi, xj) for xi in x, xj in x]
-      @assert size(g) == (params.N_mfl, params.N_mfl)
-    else
-      g = copy(params.g_init)
-    end
+    g = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "g_init")
   else
     g = nothing
   end
 
   i = 0
 
-  α_init = [params_in.α_init_func_scaled(x[i], x[j]) for i in 1:N_mfl, j in 1:N_mfl]
+  α = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "alpha")
+  if params.f_dependent_g
+    @assert !isnothing(α) "α is Nothing, but f_dependent_g is set!"
+  end
 
-  if params.store
-    if !isdir(params.store_path)
-      throw("Directory $(params.store_path) does not exist!")
-    end
-    store_i = [i]
-    store_f = [f_init]
-    store_fαf_M1 = [sum(x .* f_init .* α_init .* f_init') / sum(f_init .* α_init .* f_init')]
-    if !params.constant_g
-      store_g = [(0, copy(g))]
-      store_g_M1 = [sum(x .* g) / sum(g)]
-    end
+  if !isdir(store_dir)
+    throw("Directory $(store_dir) does not exist!")
+  end
+  store_i = [i]
+  store_f = [copy(f)]
+  if !params.constant_g
+    store_g = [(0, copy(g))]
+    store_g_M1 = [sum(x .* g) / sum(g)]
   end
 
   # Initial mass
@@ -522,7 +507,7 @@ function launch(params_in, store_path)
         if !params.constant_g
           if params.f_dependent_g
             # DEFINITION G
-            g .= (f .* α_init .* f') ./ params.connection_density
+            g .= (f .* α .* f') ./ params.connection_density
           else
             g .-= params.δt / params.δx * dg
           end
@@ -611,40 +596,32 @@ function launch(params_in, store_path)
       throw("Unkown time-stepping method '$(params.time_stepping)'")
     end
 
-    if params.store && i % params.store_every_iter == 0
+    if i % params.store_every_iter == 0
       push!(store_i, i)
       push!(store_f, copy(f))
-      push!(store_fαf_M1, sum(x .* f .* α_init .* f') / sum(f .* α_init .* f'))
       if !params.constant_g
         push!(store_g_M1, sum(x .* g) / sum(g))
         push!(store_g, (i, copy(g)))
         if length(store_g) > 100
-          HDF5.h5open(joinpath(params.store_path, "data_meanfield.h5"), "cw") do fid
-            for (i, g) in store_g
-              fid["g/$(i)"] = g
-            end
-          end
+          store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["g/$i" => g for (i, g) in store_g])
           empty!(store_g)
         end
       end
     end
   end
 
-  if params.store
-    @info "Saving data to disk @ $(params.store_path)"
-    HDF5.h5open(joinpath(params.store_path, "data_meanfield.h5"), "cw") do fid
-      fid["i"] = store_i
-      fid["f"] = hcat(store_f...)
-      fid["α_init"] = α_init
-      fid["fαf_M1"] = store_fαf_M1
-      if !params.constant_g
-        fid["g_M1"] = store_g_M1
-        for (i, g) in store_g
-          fid["g/$(i)"] = g
-        end
-      end
-    end
+  @info "Saving data to disk @ $(store_dir)"
+  store_pairs = vcat(
+    ["i" => store_i, "f" => hcat(store_f...)],
+  )
+  if !params.constant_g
+    append!(store_pairs,
+      ["g/$i" => g for (i, g) in store_g],
+      ["g_M1" => store_g_M1]
+    )
   end
+
+  store_hdf5_data(joinpath(store_dir, "data.hdf5"), store_pairs)
 
   p = UnicodePlots.lineplot(f, width=100, height=30, yscale=params.plot_scale, name="f")
   UnicodePlots.lineplot!(p, f_init, name="f_init")
@@ -654,13 +631,9 @@ function launch(params_in, store_path)
   UnicodePlots.lineplot!(p, a_init, name="a_init")
   println(p)
 
-  if params.store
-    p = UnicodePlots.lineplot(store_fαf_M1, width=100, height=30, name="∫∫ ω fαf(ω,m) dω dm")
+  if !params.constant_g
+    p = UnicodePlots.lineplot(store_g_M1, width=100, height=30, name="∫∫ ω g(ω,m) dω dm")
     println(p)
-    if !params.constant_g
-      p = UnicodePlots.lineplot(store_g_M1, width=100, height=30, name="∫∫ ω g(ω,m) dω dm")
-      println(p)
-    end
   end
 
   @info @fmt extrema(f)

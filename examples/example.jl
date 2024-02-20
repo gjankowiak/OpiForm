@@ -1,25 +1,50 @@
 import OpiForm
 import Polynomials
-import SparseArrays as SpA
 
-function main(suffix)
+function main()
 
   #########################
   #      PARAMETERS       #
   #########################
 
   ### DISCRETIZATION ###
-  N = 301
-  N_discrete = 1000
+
+  # discretization size for the meanfield model
+  N_mfl = 101
+
+  # number of agents for the micro model
+  N_micro = 100
+
+  # used for the sampling of f_init, α_init
+  # beware that a full matrix N_sampling x N_sampling of floats will be allocated
+  N_sampling = 1000
+
+  # time step, fixed
   δt = 1e-3
-  max_iter = 10_000
+
+  # maximum number of time iterations
+  max_iter = 2_000
 
   ### INITIALIZATION ###
 
-  # Method
-  # :micro
-  # :mfl
-  init_method = :micro
+  # Micro model
+  # :from_file, :from_sampling_f_init
+  init_method_omega = :from_sampling_f_init
+
+  # :from_file, :from_sampling_α_init, :from_graph
+  init_method_adj_matrix = :from_graph
+
+  # Meanfield limit
+  # :from_file, :from_f_init, :from_kde_omega
+  init_method_f = :from_kde_omega
+
+  # :from_file, :from_α_init, :from_kde_adj_matrix
+  init_method_g = :from_kde_adj_matrix
+
+  init_micro_filename = nothing
+  init_mfl_filename = nothing
+  init_micro_iter = 0
+  init_mfl_iter = 0
 
   ## INITIALIZATION: MICRO ##
 
@@ -33,27 +58,27 @@ function main(suffix)
   # :barabasi_albert
   # :erdos_renyi
   # :barbell_graph
+  # :newman_watts_strogatz
 
-  init_micro_graph_type = dorogovtsev_mendes
-  init_micro_args = (n,)
+  init_micro_graph_type = :dorogovtsev_mendes
+  init_micro_graph_args = (N_micro,)
 
   # init_micro_graph_types = barabasi_albert
-  # init_micro_args = (n, k)
+  # init_micro_graph_args = (n, k)
   #
   # init_micro_graph_types = erdos_renyi
-  # init_micro_args = (n, d)
+  # init_micro_graph_args = (n, d)
   #
   # init_micro_graph_types = barbell_graph
-  # init_micro_args = (n - n ÷ 2, n ÷ 2)
+  # init_micro_graph_args = (n - n ÷ 2, n ÷ 2)
 
   ## INITIALIZATION: MFL ##
   #
   # Required fields:
-  # - f_init_poly_unscaled::T <: Polynomial
-  # - α_init_func::Function(x::Vector{Float64})
+  # - f_init_func::Function(x::Float64)
+  # - α_init_func::Function(ω::Float64, m::Float64)
   # - connection_density::Real
-  #
-  # Optional fields:
+
   # - constant_α::Bool=false
   # - constant_g::Bool=false
   # - full_adj_matrix::Bool=false
@@ -91,6 +116,7 @@ function main(suffix)
   chebyshev_coeffs = zeros(n_bumps * 2)
   chebyshev_coeffs[end] = 1
   f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+  f_init_func(x) = f_init_poly_unscaled(x)
 
   # more asymmetric bumps (chebyshev)
   # n_bumps = 3
@@ -116,6 +142,7 @@ function main(suffix)
   # Step
   # f_init_func = x -> (2 + round(2 * x)) * (x < 0)
 
+
   #### Α (CONNECTIVITY DISCRIBUTION) ####
 
   # use a constant α for the initialization, it will be scaled for you
@@ -135,21 +162,17 @@ function main(suffix)
   # ∫g = λ (see the overleaf file),
   #    = N_discete * connection_density.
   # The number of non-zero entries in the adjacency matrix
-  # will be roughly N_discrete^2*connection_density, so the resulting density will
+  # will be roughly N_micro^2*connection_density, so the resulting density will
   # be connection_density, i.e. connection_density should be less than 1!
 
   connection_density = 0.1
   @assert connection_density < 1
 
-  function α_init_func(x::Vector{Float64})
-    ω, m = x
+  function α_init_func(ω::Float64, m::Float64)
     stddev = 0.3
     r = exp(-(ω - m)^2 / stddev^2) + 0.4
     return r
   end
-
-  sas_result = OpiForm.scale_and_sample(α_init_func, f_init_poly_unscaled, connection_density, N_discrete, constant_α, full_adj_matrix)
-
 
   ### VISUALIZATION ###
   plot_scale = identity
@@ -253,8 +276,9 @@ function main(suffix)
 
   params = (
     # domain
-    N_mf=N_mf,
-    N_discrete=N_discrete,
+    N_mfl=N_mfl,
+    N_micro=N_micro,
+    N_sampling=N_sampling,
     δt=δt,
     max_iter=max_iter,
 
@@ -284,25 +308,32 @@ function main(suffix)
     normalize_chambers=normalize_chambers,
 
     # initial conditions
+    init_method_omega=init_method_omega,
+    init_method_adj_matrix=init_method_adj_matrix,
+    #
+    # Meanfield limit
+    init_method_f=init_method_f,
 
-    ### Continuous model
-    ### f
-    f_init_poly=sas_result.f_init_poly,
-    f_init_func=sas_result.f_init_func,
+    # :from_file, :from_α_init, :from_kde_adj_matrix
+    init_method_g=init_method_g, init_micro_filename=init_micro_filename,
+    init_mfl_filename=init_mfl_filename,
+    init_micro_iter=init_micro_iter,
+    init_mfl_iter=init_mfl_iter,
+
+    ## INITIALIZATION: MICRO ##
+    init_micro_graph_type=init_micro_graph_type,
+    init_micro_graph_args=init_micro_graph_args,
+
+    ### MFL
+    f_init_func=f_init_func,
     ### g
-    g_init_func_scaled=sas_result.g_init_func_scaled,
-    α_init_func_scaled=sas_result.α_init_func_scaled,
-    g_init=sas_result.g_init,
+    α_init_func=α_init_func,
     f_dependent_g=f_dependent_g,
     constant_α=constant_α, # if true, then g = 1 (modulo normalization). Overrides g_init.
     constant_g=constant_g, # legacy parameter, unused, should be false
-    ω_inf_mf_init=sas_result.ω_inf_mf_init,
 
-    ### Discrete model
+    ### Micro model
     full_adj_matrix=full_adj_matrix,
-    ### u
-    ops_init=sas_result.ops_init,
-    adj_matrix=sas_result.adj_matrix,
 
     # visualization
     plot_scale=plot_scale, # can be :log10
@@ -310,7 +341,6 @@ function main(suffix)
     plot_backend=plot_backend,
 
     # storage
-    store=store,
     store_overwrite=store_overwrite,
     store_every_iter=store_every_iter,
 
@@ -327,28 +357,41 @@ function main(suffix)
     CFL_violation=CFL_violation
   )
 
-  OpiForm.set_makie_backend(:gl)
-
-  params_lLF = merge(params, (flux=:lLF, f_dependent_g=false))
-  store_path = "results/test_meanfield_" * suffix
-  OpiForm.MeanField.launch(params_lLF, store_path)
-
-  params_lLF_fdg = merge(params, (flux=:lLF, f_dependent_g=true))
-  store_path = "results/test_meanfield_fdg_" * suffix
-  OpiForm.MeanField.launch(params_lLF_fdg, store_path)
-
-  store_path = "results/test_discrete_" * suffix
-  OpiForm.Discrete.launch(params, store_path)
+  return params
 
 end
 
-suffix = "2_bumps_flatter"
+
 
 #########################
 #          RUN          #
 #########################
 
-# main(suffix)
+# params = main()
+#
+# suffix = "2_bumps_flatter"
+#
+# OpiForm.set_makie_backend(:gl)
+#
+# store_dir_micro = "results/test_micro_" * suffix
+# params_micro = params
+# OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
+#
+# store_dir_mfl = "results/test_meanfield_" * suffix
+# params_lLF = merge(params, (
+#   flux=:lLF, f_dependent_g=false,
+#   init_method_omega=:from_file,
+#   init_method_adj_matrix=:from_file,
+#   init_method_f=:from_kde_omega,
+#   init_method_g=:from_kde_adj_matrix,
+#   init_micro_filename = joinpath(store_dir_micro, "data.hdf5")
+# ))
+# OpiForm.MeanField.launch(store_dir_mfl, params_lLF; force=true)
+
+# params_lLF_fdg = merge(params, (flux=:lLF, f_dependent_g=true))
+# store_dir = "results/test_meanfield_fdg_" * suffix
+# OpiForm.MeanField.launch(store_dir, params_lLF_fdg)
+
 
 #########################
 #         PLOT          #
@@ -356,29 +399,29 @@ suffix = "2_bumps_flatter"
 
 # Movie
 
-# OpiForm.plot_result("test_$(suffix).mp4";
-#   meanfield_dir="results/test_meanfield_" * suffix,
-#   discrete_dir="results/test_discrete_" * suffix,
-#   half_connection_matrix=true,
-#   center_histogram=false
-# )
+OpiForm.plot_result("test_$(suffix).mp4";
+  meanfield_dir="results/test_meanfield_" * suffix,
+  micro_dir="results/test_micro_" * suffix,
+  half_connection_matrix=true,
+  center_histogram=false
+)
 
 # Movie with centered histogram
 
-OpiForm.plot_result("test_$(suffix)_centered_histogram.mp4";
-  meanfield_dir="results/test_meanfield_" * suffix,
-  discrete_dir="results/test_discrete_" * suffix,
-  half_connection_matrix=true,
-  center_histogram=true
-)
+# OpiForm.plot_result("test_$(suffix)_centered_histogram.mp4";
+#   meanfield_dir="results/test_meanfield_" * suffix,
+#   micro_dir="results/test_micro_" * suffix,
+#   half_connection_matrix=true,
+#   center_histogram=true
+# )
 
 # Comvergence plots
 
-OpiForm.compare_peak2peak(
-  [
-    "results/test_meanfield_" * suffix,
-    "results/test_meanfield_fdg_" * suffix,
-  ], [
-    "results/test_discrete_" * suffix,
-  ]
-)
+# OpiForm.compare_peak2peak(
+#   [
+#     "results/test_meanfield_" * suffix,
+#     "results/test_meanfield_fdg_" * suffix,
+#   ], [
+#     "results/test_micro_" * suffix,
+#   ]
+# )

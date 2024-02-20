@@ -115,17 +115,82 @@ function build_x(N)
 end
 
 function load_hdf5_data(filename::String, key::String)
-  data = HDF5.h5open(filename)
+  h5 = HDF5.h5open(filename, "r")
   try
-    return read(data[key])
+    r = read(h5[key])
+    close(h5)
+    return r
   catch
+    close(h5)
     return nothing
   end
+end
+
+"""
+    store_hdf5_data(filename::String, key_data_pairs::Vector{Pair{String,T}}) where {T<:Any}
+
+Store open the HDF5 storage at `filename`, write the non-nothing values to it and close it.
+"""
+function store_hdf5_data(filename::String, key_data_pairs::Vector{Pair{String,T}}) where {T<:Any}
+  h5 = HDF5.h5open(filename, "cw")
+  for (key, data) in key_data_pairs
+    if isnothing(data)
+      continue
+    end
+    try
+      h5[key] = data
+    catch
+      close(h5)
+      return false
+    end
+  end
+  close(h5)
+  return true
+end
+
+function store_hdf5_data(filename::String, key::String, data::Any)
+  return store_hdf5_data(filename, [key => data])
+end
+
+function store_hdf5_sparse(filename::String, key::String, A::SpA.SparseMatrixCSC)
+  i, j, v = get_ijv(A)
+  HDF5.h5open(filename, "cw") do h5
+    h5["$key/i"] = i
+    h5["$key/j"] = j
+    h5["$key/v"] = v
+  end
+end
+
+function load_hdf5_sparse(filename::String, key::String)::SpA.SparseMatrixCSC
+  h5 = HDF5.h5open(filename, "r")
+  try
+    i = read(h5["$key/i"])
+    j = read(h5["$key/j"])
+    v = read(h5["$key/v"])
+    close(h5)
+    return SpA.sparse(i, j, v)
+  catch
+    close(h5)
+    return nothing
+  end
+end
+
+"""
+    get_ijv(A::SA.SparseMatrixCSC)
+
+Return the I, J and V vectors needed to build a SparseMatrixCSC
+"""
+function get_ijv(A::SpA.SparseMatrixCSC)
+  v = SpA.nonzeros(A)
+  i = SpA.rowvals(A)
+  j = Array(SpA.ColumnIndices(A))
+  return i, j, v
 end
 
 function load_metadata(dn::String)
   return TOML.parsefile(joinpath(dn, "metadata.toml"))
 end
+
 
 macro left(v, fill=0.0)
   return esc(:(SA.shiftedarray($v, 1, $fill)))

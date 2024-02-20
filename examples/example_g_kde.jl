@@ -57,14 +57,14 @@ function compute_g_kde(n, graph_type, graph_args)
   kde_ω = KernelDensity.kde(ω)
   interp_kde_ω = KernelDensity.InterpKDE(kde_ω)
 
-  kde_A = KernelDensity.kde((ωx, ωy))
-  interp_kde_A = KernelDensity.InterpKDE(kde_A)
+  kde_adj_matrix = KernelDensity.kde((ωx, ωy))
+  interp_kde_adj_matrix = KernelDensity.InterpKDE(kde_adj_matrix)
 
   n_x = 1001
   x = range(-1, 1; length=n_x)
   δx = 2 / n_x
 
-  eval_kde_A = [KernelDensity.pdf(interp_kde_A, _x, _y) for _x in x, _y in x]
+  eval_kde_adj_matrix = [KernelDensity.pdf(interp_kde_adj_matrix, _x, _y) for _x in x, _y in x]
 
   fig = M.Figure()
 
@@ -91,7 +91,7 @@ function compute_g_kde(n, graph_type, graph_args)
   end
   GM.graphplot!(ax_bottomleft, g, alpha=0.1, edge_width=edge_width, node_size=0.5)
 
-  M.heatmap!(ax_topright, x, x, eval_kde_A, colormap=:ice)
+  M.heatmap!(ax_topright, x, x, eval_kde_adj_matrix, colormap=:ice)
   M.hexbin!(ax_topmid, ωx, ωy, cellsize=2 / 100, colormap=:ice, threshold=0)
 
   display(fig)

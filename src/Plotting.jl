@@ -44,28 +44,29 @@ function plot_results(output_filename::String;
 
   if has_mfl
     labels = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
-    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
-    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
     params_mfl_a = map(load_metadata, meanfield_dirs)
 
-    α_init_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "α_init"), meanfield_dirs)
+    α_init_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "alpha"), meanfield_dirs)
+    has_alpha = map(α -> !isnothing(α), α_init_a)
 
     N_micro_mfl_a = map(dn -> (
         meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
         return meta["N_micro"]
       ), meanfield_dirs)
 
-    ω_inf_mfl_a = map(dn -> (
-        meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
-        return meta["omega_inf_mfl"]
-      ), meanfield_dirs)
+    # ω_inf_mfl_a = map(dn -> (
+    #     meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
+    #     return meta["omega_inf_mfl"]
+    #   ), meanfield_dirs)
 
     N_a = map(f -> size(f, 1), f_a)
 
     obs_g_k = nothing
     function get_g_iter(dn, iter)
       try
-        return load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g/$iter")
+        return load_hdf5_data(joinpath(dn, "data.hdf5"), "g/$iter")
       catch
         return nothing
       end
@@ -80,10 +81,9 @@ function plot_results(output_filename::String;
 
   if has_d
     micro_dir = micro_dirs[1]
-    ops = load_hdf5_data(joinpath(micro_dir, "data_micro.h5"), "ops")
-    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_micro.h5"), "i"), micro_dirs)
-    adj_matrix_full = load_hdf5_data(joinpath(micro_dir, "data_micro.h5"), "adj_matrix")
-    adj_matrix = isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full)
+    ops = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    adj_matrix = load_hdf5_sparse(joinpath(micro_dir, "data.hdf5"), "adj_matrix")
     params_d_a = map(load_metadata, micro_dirs)
     N_micro = size(ops, 1)
     if !isnothing(adj_matrix)
@@ -168,7 +168,7 @@ function plot_results(output_filename::String;
   if has_mfl
     obs_f_a = [M.@lift f_a[k][:, $obs_i] for k in 1:K_mfl]
     # DEFINITION G
-    obs_fαf_a = [M.@lift f_a[k][:, $obs_i] .* α_init_a[k] .* f_a[k][:, $obs_i]' / params_mfl_a[k]["connection_density"] for k in 1:K_mfl]
+    # obs_fαf_a = [M.@lift f_a[k][:, $obs_i] .* α_init_a[k] .* f_a[k][:, $obs_i]' / params_mfl_a[k]["connection_density"] for k in 1:K_mfl]
 
     function find_support(f_a)
       left_idc = map(f -> (idx = findfirst(x -> x > 1e-5, f[]); return (isnothing(idx) ? 1 : idx)), f_a)
@@ -206,8 +206,8 @@ function plot_results(output_filename::String;
         if k == 1
         end
       end
-      hm = M.heatmap!(ax3, x_a[k], x_a[k], obs_fαf_a[k], colorrange=obs_max_g_a, colormap=:ice)
-      M.Colorbar(fig[5, 2:2], hm; vertical=false)
+      # hm = M.heatmap!(ax3, x_a[k], x_a[k], obs_fαf_a[k], colorrange=obs_max_g_a, colormap=:ice)
+      # M.Colorbar(fig[5, 2:2], hm; vertical=false)
     end
 
     legend = M.Legend(g_bottom_left[1, 1], ax1)
@@ -303,9 +303,9 @@ function plot_results(output_filename::String;
     obs_max_g_a[] = (0.0, 1.05 * max_g_a)
 
     int_g = sum(obs_g_k[1][]) * (2 / N_mfl)^2
-    int_fαf = sum(obs_fαf_a[1][]) * (2 / N_mfl)^2
+    # int_fαf = sum(obs_fαf_a[1][]) * (2 / N_mfl)^2
     ax2.title = "g(ω,m), ∫∫g = $(round(int_g; digits=3))"
-    ax3.title = "fαf(ω,m), ∫∫fαf = $(round(int_fαf; digits=3))"
+    # ax3.title = "fαf(ω,m), ∫∫fαf = $(round(int_fαf; digits=3))"
 
     if has_mfl
       support = find_support(obs_f_a)
@@ -363,8 +363,8 @@ function compare_peak2peak(
 
   if K_mfl > 0
     labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
-    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
-    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
     params_mfl_a = map(load_metadata, meanfield_dirs)
 
     N_a = map(f -> size(f, 1), f_a)
@@ -385,17 +385,17 @@ function compare_peak2peak(
 
     rates_mfl_a = [compute_p2p_rate(i_mfl_a[k], support_width_mfl_a[k], params_mfl_a[k]["delta_t"]; cutoff_time=0.25 * params_mfl_a[k]["delta_t"] * i_mfl_a[k][end]) for k in 1:K_mfl]
 
-    g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g_M1"), meanfield_dirs)
+    g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "g_M1"), meanfield_dirs)
 
   end
 
   if K_d > 0
     labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
-    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_micro.h5"), "i"), micro_dirs)
-    ops_a = map(dn -> load_hdf5_data(joinpath(dn, "data_micro.h5"), "ops"), micro_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    ops_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "ops"), micro_dirs)
     params_d_a = map(load_metadata, micro_dirs)
 
-    adj_matrix_full_a = map(dn -> load_hdf5_data(joinpath(dn, "data_micro.h5"), "adj_matrix"), micro_dirs)
+    adj_matrix_full_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
     adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
     N_micro_a = map(ops -> size(ops, 1), ops_a)
 

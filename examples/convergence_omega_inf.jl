@@ -2,7 +2,7 @@ import OpiForm
 import Polynomials
 import UnicodePlots
 
-function sample_ω_inf(N_discrete)
+function sample_ω_inf(N_micro)
 
   ### Initial conditions ###
 
@@ -83,7 +83,7 @@ function sample_ω_inf(N_discrete)
   # ∫g = λ (see the overleaf file),
   #    = N_discete * connection_density.
   # The number of non-zero entries in the adjacency matrix
-  # will be roughly N_discrete^2*connection_density, so the resulting density will
+  # will be roughly N_micro^2*connection_density, so the resulting density will
   # be connection_density, i.e. connection_density should be less than 1!
 
   connection_density = 0.1
@@ -96,9 +96,9 @@ function sample_ω_inf(N_discrete)
     return r
   end
 
-  sas_result = OpiForm.scale_and_sample(α_init_func, f_init_poly_unscaled, connection_density, N_discrete, constant_α, full_adj_matrix)
+  sas_result = OpiForm.scale_and_sample(α_init_func, f_init_poly_unscaled, connection_density, N_micro, constant_α, full_adj_matrix)
 
-  r = [sas_result.ω_inf_d_init; sas_result.ω_inf_mf_init]
+  r = [sas_result.ω_inf_d_init; sas_result.ω_inf_mfl_init]
   @show r
   return r
 end
@@ -106,5 +106,5 @@ end
 N_r = [20; 50; 100; 250; 500; 1000; 2000; 3000]
 ω_inf = hcat(map(sample_ω_inf, N_r)...)
 
-p = UnicodePlots.lineplot(N_r, ω_inf[1, :]; width=80, xlabel="N_discrete", name="ω_∞_discrete")
-UnicodePlots.lineplot!(p, N_r, ω_inf[2, :], name="ω_∞_mf")
+p = UnicodePlots.lineplot(N_r, ω_inf[1, :]; width=80, xlabel="N_micro", name="ω_∞_micro")
+UnicodePlots.lineplot!(p, N_r, ω_inf[2, :], name="ω_∞_mfl")

@@ -29,20 +29,20 @@ end
 
 function compute_diffs!(dst::Matrix{Float64}, params::NamedTuple, ops::Vector{Float64})
   # ops_diff[i,j] = ops[j] - ops[i]
-  for j in 1:params.N_discrete
+  for j in 1:params.N_micro
     dst[:, j] .= ops[j] .- ops
   end
 
   # slower:
-  #dst .= -repeat(ops, 1, params.N_discrete) + repeat(ops, 1, params.N_discrete)'
+  #dst .= -repeat(ops, 1, params.N_micro) + repeat(ops, 1, params.N_micro)'
 end
 
 function compute_diffs(params::NamedTuple, ops::Vector{Float64})
-  return -repeat(ops, 1, params.N_discrete) + repeat(ops', params.N_discrete, 1)
+  return -repeat(ops, 1, params.N_micro) + repeat(ops', params.N_micro, 1)
 end
 
 function delta_EC!(inc::Matrix{Float64}, params::NamedTuple, ops::Vector{Float64}, ops_diff::Matrix{Float64})
-  repeat_ops = repeat(ops', params.N_discrete, 1)
+  repeat_ops = repeat(ops', params.N_micro, 1)
 
   B_ρ = -params.EC_ρ .<= ops_diff .<= params.EC_ρ
   B_lower = -params.EC_ρ .> ops_diff
@@ -59,16 +59,16 @@ function delta_EC!(inc::Matrix{Float64}, params::NamedTuple, ops::Vector{Float64
   delta_group = vec(sum(B_ρ .* ops_diff; dims=2))
 
   # Attracting term
-  inc[:, 2] = delta_group / params.N_discrete
+  inc[:, 2] = delta_group / params.N_micro
 
   # Repulsing term
-  inc[:, 3] = (-size_B_lower .* (μ_lower - µ_ρ) - size_B_higher .* (μ_higher - µ_ρ)) / params.N_discrete
+  inc[:, 3] = (-size_B_lower .* (μ_lower - µ_ρ) - size_B_higher .* (μ_higher - µ_ρ)) / params.N_micro
 
 end
 
 function delta_EC_potential!(inc::Matrix{Float64}, params::NamedTuple, ops::Vector{Float64}, ops_diff::Matrix{Float64}, ∇u)
   ops_diff .= ∇u.(abs.(ops_diff)) .* sign.(ops_diff)
-  inc[:, 2] = vec(sum(ops_diff; dims=2)) / (params.N_discrete - 1)
+  inc[:, 2] = vec(sum(ops_diff; dims=2)) / (params.N_micro - 1)
 end
 
 function delta_EB!(inc::Matrix{Float64}, tmp::Matrix{Float64}, params::NamedTuple, ops::Vector{Float64}, ops_diff::Matrix{Float64}, adj_mat, neighbors::Vector{Int64})
@@ -109,19 +109,19 @@ function launch(params_in, store_path)
     store_path=store_path,
   ))
 
-  prepare(params, :discrete)
+  prepare(params, :micro)
 
-  #M = zeros(params.N_discrete, params.N_discrete)
+  #M = zeros(params.N_micro, params.N_micro)
 
   ops = copy(params.ops_init)
 
   i = 1
 
-  ops_diff = Matrix{Float64}(undef, params.N_discrete, params.N_discrete)
-  tmp = Matrix{Float64}(undef, params.N_discrete, params.N_discrete)
+  ops_diff = Matrix{Float64}(undef, params.N_micro, params.N_micro)
+  tmp = Matrix{Float64}(undef, params.N_micro, params.N_micro)
 
   if params.full_adj_matrix
-    neighbors = fill(params.N_discrete - 1, (params.N_discrete,))
+    neighbors = fill(params.N_micro - 1, (params.N_micro,))
   else
     neighbors = Vector{Int64}(vec(max.(1, sum(params.adj_matrix; dims=2) .- 1)))
   end
@@ -131,7 +131,7 @@ function launch(params_in, store_path)
   # 1st column: EB                   | (Debate)
   # 2nd column: EC (attractive term) | (Radicalization)
   # 3rd column: EC (repulsive term)  | (Polarization)
-  inc = zeros(params.N_discrete, 3)
+  inc = zeros(params.N_micro, 3)
 
   if params.store
     store_i = [0]
@@ -170,7 +170,7 @@ function launch(params_in, store_path)
 
   if params.store
     @info "Saving data to disk @ $(params.store_path)"
-    HDF5.h5open(joinpath(params.store_path, "data_discrete.h5"), "w") do fid
+    HDF5.h5open(joinpath(params.store_path, "data_micro.h5"), "w") do fid
       fid["i"] = store_i
       fid["ops"] = hcat(store_ops...)
       if !params.full_adj_matrix

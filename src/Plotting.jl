@@ -3,27 +3,27 @@ function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float
   return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
 end
 
-function plot_result(output_filename::String; meanfield_dir::Union{String,Nothing}=nothing, discrete_dir::Union{String,Nothing}=nothing, kwargs...)
-  mf_dirs = isnothing(meanfield_dir) ? String[] : [meanfield_dir]
-  d_dirs = isnothing(discrete_dir) ? String[] : [discrete_dir]
-  return plot_results(output_filename; meanfield_dirs=mf_dirs, discrete_dirs=d_dirs, kwargs...)
+function plot_result(output_filename::String; meanfield_dir::Union{String,Nothing}=nothing, micro_dir::Union{String,Nothing}=nothing, kwargs...)
+  mfl_dirs = isnothing(meanfield_dir) ? String[] : [meanfield_dir]
+  d_dirs = isnothing(micro_dir) ? String[] : [micro_dir]
+  return plot_results(output_filename; meanfield_dirs=mfl_dirs, micro_dirs=d_dirs, kwargs...)
 end
 
 function plot_results(output_filename::String;
   meanfield_dirs::Vector{String}=String[],
-  discrete_dirs::Vector{String}=String[],
+  micro_dirs::Vector{String}=String[],
   kwargs...)
 
   # check that the dirs actually exist
   @assert all(isdir, meanfield_dirs)
-  @assert all(isdir, discrete_dirs)
+  @assert all(isdir, micro_dirs)
 
-  has_mf, has_d = length(meanfield_dirs) > 0, length(discrete_dirs) > 0
-  @assert length(discrete_dirs) <= 1 "currently only a single discrete result is supported"
+  has_mfl, has_d = length(meanfield_dirs) > 0, length(micro_dirs) > 0
+  @assert length(micro_dirs) <= 1 "currently only a single micro result is supported"
 
-  K_mf = length(meanfield_dirs)
+  K_mfl = length(meanfield_dirs)
 
-  if !(has_mf || has_d)
+  if !(has_mfl || has_d)
     @error "No dir provided"
     return
   end
@@ -33,31 +33,31 @@ function plot_results(output_filename::String;
   center_histogram = get(kwargs, :center_histogram, false)
 
   if center_histogram
-    if K_mf > 1
-      throw("Can center histogram with only one meanfield solution, you provided $K_mf")
+    if K_mfl > 1
+      throw("Can center histogram with only one meanfield solution, you provided $K_mfl")
     end
-    @warn "Histogram for the discrete solution will be centered on ω_∞ given by the initial meanfield data!"
+    @warn "Histogram for the micro solution will be centered on ω_∞ given by the initial meanfield data!"
   end
 
   obs_i = M.Observable(1)
   obs_iter = M.Observable(0)
 
-  if has_mf
+  if has_mfl
     labels = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
-    i_mf_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
     f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
-    params_mf_a = map(load_metadata, meanfield_dirs)
+    params_mfl_a = map(load_metadata, meanfield_dirs)
 
     α_init_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "α_init"), meanfield_dirs)
 
-    N_discrete_mf_a = map(dn -> (
+    N_micro_mfl_a = map(dn -> (
         meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
-        return meta["N_discrete"]
+        return meta["N_micro"]
       ), meanfield_dirs)
 
-    ω_inf_mf_a = map(dn -> (
+    ω_inf_mfl_a = map(dn -> (
         meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
-        return meta["omega_inf_mf"]
+        return meta["omega_inf_mfl"]
       ), meanfield_dirs)
 
     N_a = map(f -> size(f, 1), f_a)
@@ -79,13 +79,13 @@ function plot_results(output_filename::String;
   end
 
   if has_d
-    discrete_dir = discrete_dirs[1]
-    ops = load_hdf5_data(joinpath(discrete_dir, "data_discrete.h5"), "ops")
-    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "i"), discrete_dirs)
-    adj_matrix_full = load_hdf5_data(joinpath(discrete_dir, "data_discrete.h5"), "adj_matrix")
+    micro_dir = micro_dirs[1]
+    ops = load_hdf5_data(joinpath(micro_dir, "data_micro.h5"), "ops")
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_micro.h5"), "i"), micro_dirs)
+    adj_matrix_full = load_hdf5_data(joinpath(micro_dir, "data_micro.h5"), "adj_matrix")
     adj_matrix = isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full)
-    params_d_a = map(load_metadata, discrete_dirs)
-    N_discrete = size(ops, 1)
+    params_d_a = map(load_metadata, micro_dirs)
+    N_micro = size(ops, 1)
     if !isnothing(adj_matrix)
       @assert SpA.is_hermsym(adj_matrix, identity)
 
@@ -104,7 +104,7 @@ function plot_results(output_filename::String;
       function get_xy(opis)
         rows = SpA.rowvals(adj_matrix)
         got = 0
-        for j in 1:N_discrete
+        for j in 1:N_micro
           nzr = SpA.nzrange(adj_matrix, j)
           nnz_in_col = length(nzr)
 
@@ -136,7 +136,7 @@ function plot_results(output_filename::String;
 
       get_xy(ops[:, 1])
     else
-      ω_inf_d = sum(ops[:, 1]) / N_discrete
+      ω_inf_d = sum(ops[:, 1]) / N_micro
     end
   end
 
@@ -144,13 +144,13 @@ function plot_results(output_filename::String;
   set_makie_backend(:gl)
 
   warning = center_histogram ? " !!! The ω_i have been centered to ω_∞ (from MF initial data)" : ""
-  N_mf = isempty(N_a) ? 300 : N_a[1]
+  N_mfl = isempty(N_a) ? 300 : N_a[1]
 
   fig = M.Figure(size=(1920, 1080))
   ax1 = M.Axis(fig[1:4, 1])
   ax1.title = "f / ω_i"
 
-  if has_mf
+  if has_mfl
     ax2 = M.Axis(fig[1:4, 2], aspect=1)
     ax2.title = "g(ω,m)"
     ax2.xlabel = warning
@@ -165,17 +165,17 @@ function plot_results(output_filename::String;
     g_bottom_right = fig[5, 2:2] = M.GridLayout()
   end
 
-  if has_mf
-    obs_f_a = [M.@lift f_a[k][:, $obs_i] for k in 1:K_mf]
+  if has_mfl
+    obs_f_a = [M.@lift f_a[k][:, $obs_i] for k in 1:K_mfl]
     # DEFINITION G
-    obs_fαf_a = [M.@lift f_a[k][:, $obs_i] .* α_init_a[k] .* f_a[k][:, $obs_i]' / params_mf_a[k]["connection_density"] for k in 1:K_mf]
+    obs_fαf_a = [M.@lift f_a[k][:, $obs_i] .* α_init_a[k] .* f_a[k][:, $obs_i]' / params_mfl_a[k]["connection_density"] for k in 1:K_mfl]
 
     function find_support(f_a)
       left_idc = map(f -> (idx = findfirst(x -> x > 1e-5, f[]); return (isnothing(idx) ? 1 : idx)), f_a)
       right_idc = map(f -> (idx = findlast(x -> x > 1e-5, f[]); return (isnothing(idx) ? length(f[]) : idx)), f_a)
 
-      left_x = [x_a[i][left_idc[i]] for i in 1:K_mf]
-      right_x = [x_a[i][right_idc[i]] for i in 1:K_mf]
+      left_x = [x_a[i][left_idc[i]] for i in 1:K_mfl]
+      right_x = [x_a[i][right_idc[i]] for i in 1:K_mfl]
 
       if has_d
         return (left=min(minimum(obs_ops[]), minimum(left_x)), right=max(maximum(obs_ops[]), maximum(right_x)))
@@ -189,7 +189,7 @@ function plot_results(output_filename::String;
     end
 
     if !constant_g
-      obs_gff_a = [M.Observable(obs_g_k[k][]) for k in 1:K_mf]
+      obs_gff_a = [M.Observable(obs_g_k[k][]) for k in 1:K_mfl]
       max_g_a = maximum(obs_gff_a[1][])
     else
       max_g_a = 0.0
@@ -198,7 +198,7 @@ function plot_results(output_filename::String;
     #max_g_a = max(max_g_a, maximum(obs_fαf_a[1][]))
     obs_max_g_a = M.Observable((0.0, 1.05 * max_g_a))
 
-    for k in 1:K_mf
+    for k in 1:K_mfl
       M.lines!(ax1, x_a[k], obs_f_a[k], label=labels[k])
 
       if !constant_g
@@ -216,7 +216,7 @@ function plot_results(output_filename::String;
 
   if has_d
     if center_histogram
-      obs_ops = M.@lift (ops[:, $obs_i] .+ ω_inf_mf_a[1] .- ω_inf_d)
+      obs_ops = M.@lift (ops[:, $obs_i] .+ ω_inf_mfl_a[1] .- ω_inf_d)
     else
       obs_ops = M.@lift ops[:, $obs_i]
     end
@@ -224,13 +224,13 @@ function plot_results(output_filename::String;
 
     ext_ops = M.@lift [-1; 1; $obs_ops...]
 
-    M.hist!(ax1, ext_ops; bins=2 * N_mf, normalization=:pdf)
+    M.hist!(ax1, ext_ops; bins=2 * N_mfl, normalization=:pdf)
     M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
 
     if !isnothing(adj_matrix)
 
       # The size (width) of the hexagons, which we try to scale along the evolution
-      cs_obs = M.@lift 1.0 / N_mf + 10.0 / ($obs_iter + 100)
+      cs_obs = M.@lift 1.0 / N_mfl + 10.0 / ($obs_iter + 100)
 
       # The area of the hexagons A = sqrt(3) / 2 * width^2
       # https://en.wikipedia.org/wiki/Hexagon#Parameters (d = width in the article)
@@ -264,7 +264,7 @@ function plot_results(output_filename::String;
     end
   end
 
-  i_range = enumerate(i_mf_a[1])
+  i_range = enumerate(i_mfl_a[1])
 
   function step_i(tuple)
 
@@ -273,13 +273,13 @@ function plot_results(output_filename::String;
     pct = lpad(Int(round(100 * i / length(i_range))), 3, " ")
     print("  Creating movie: $pct%" * "\b"^50)
 
-    if has_mf && any(f -> any(isnan, f[:, i]), f_a)
+    if has_mfl && any(f -> any(isnan, f[:, i]), f_a)
       return
     end
 
     obs_i[] = i
     obs_iter[] = iter
-    if has_mf
+    if has_mfl
       first_mass = 2 / N_a[1] * sum(f_a[1][:, i])
       ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
     else
@@ -291,7 +291,7 @@ function plot_results(output_filename::String;
     end
 
     if !constant_g
-      for k in 1:K_mf
+      for k in 1:K_mfl
         obs_gff_a[k][] = obs_g_k[k][]
       end
       max_g_a = maximum(obs_gff_a[1][])
@@ -302,12 +302,12 @@ function plot_results(output_filename::String;
     #max_g_a = max(max_g_a, maximum(obs_fαf_a[1][]))
     obs_max_g_a[] = (0.0, 1.05 * max_g_a)
 
-    int_g = sum(obs_g_k[1][]) * (2 / N_mf)^2
-    int_fαf = sum(obs_fαf_a[1][]) * (2 / N_mf)^2
+    int_g = sum(obs_g_k[1][]) * (2 / N_mfl)^2
+    int_fαf = sum(obs_fαf_a[1][]) * (2 / N_mfl)^2
     ax2.title = "g(ω,m), ∫∫g = $(round(int_g; digits=3))"
     ax3.title = "fαf(ω,m), ∫∫fαf = $(round(int_fαf; digits=3))"
 
-    if has_mf
+    if has_mfl
       support = find_support(obs_f_a)
       max_f = find_max(obs_f_a)
       M.ylims!(ax1, low=-1, high=1.3 * max_f)
@@ -332,77 +332,77 @@ function plot_results(output_filename::String;
 
 end
 
-function get_ω_inf_mf(dir::String)
+function get_ω_inf_mfl(dir::String)
   p = joinpath(dir, "metadata.toml")
-  r = TOML.parsefile(p)["omega_inf_mf"]
+  r = TOML.parsefile(p)["omega_inf_mfl"]
   return r
 end
 
 function compare_peak2peak(
   meanfield_dir::String,
-  discrete_dir::String,
+  micro_dir::String,
 )
-  return compare_peak2peak([meanfield_dir], [discrete_dir])
+  return compare_peak2peak([meanfield_dir], [micro_dir])
 end
 
 function compare_peak2peak(
   meanfield_dirs::Vector{String},
-  discrete_dirs::Vector{String},
+  micro_dirs::Vector{String},
 )
 
   # check that the dirs actually exist
   @assert all(isdir, meanfield_dirs)
-  @assert all(isdir, discrete_dirs)
+  @assert all(isdir, micro_dirs)
 
-  K_mf, K_d = length(meanfield_dirs), length(discrete_dirs)
+  K_mfl, K_d = length(meanfield_dirs), length(micro_dirs)
 
-  if K_mf == 0 && K_d == 0
+  if K_mfl == 0 && K_d == 0
     @error "No dir provided"
     return
   end
 
-  if K_mf > 0
-    labels_mf = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
-    i_mf_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
+  if K_mfl > 0
+    labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "i"), meanfield_dirs)
     f_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "f"), meanfield_dirs)
-    params_mf_a = map(load_metadata, meanfield_dirs)
+    params_mfl_a = map(load_metadata, meanfield_dirs)
 
     N_a = map(f -> size(f, 1), f_a)
 
-    function build_x(N_mf)
-      δx = 2 / N_mf
+    function build_x(N_mfl)
+      δx = 2 / N_mfl
       x_l, x_r = -1 + 0.5δx, 1 - 0.5δx
 
-      return range(x_l, x_r, length=N_mf)
+      return range(x_l, x_r, length=N_mfl)
     end
 
     x_a = map(build_x, N_a)
 
-    ω_inf_mf_init_a = map(dn -> get_ω_inf_mf(dn), meanfield_dirs)
+    ω_inf_mfl_init_a = map(dn -> get_ω_inf_mfl(dn), meanfield_dirs)
 
-    support_bounds_mf_a = find_support_bounds(f_a, x_a)
-    support_width_mf_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mf_a]
+    support_bounds_mfl_a = find_support_bounds(f_a, x_a)
+    support_width_mfl_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mfl_a]
 
-    rates_mf_a = [compute_p2p_rate(i_mf_a[k], support_width_mf_a[k], params_mf_a[k]["delta_t"]; cutoff_time=0.25 * params_mf_a[k]["delta_t"] * i_mf_a[k][end]) for k in 1:K_mf]
+    rates_mfl_a = [compute_p2p_rate(i_mfl_a[k], support_width_mfl_a[k], params_mfl_a[k]["delta_t"]; cutoff_time=0.25 * params_mfl_a[k]["delta_t"] * i_mfl_a[k][end]) for k in 1:K_mfl]
 
     g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data_meanfield.h5"), "g_M1"), meanfield_dirs)
 
   end
 
   if K_d > 0
-    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), discrete_dirs)
-    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "i"), discrete_dirs)
-    ops_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "ops"), discrete_dirs)
-    params_d_a = map(load_metadata, discrete_dirs)
+    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data_micro.h5"), "i"), micro_dirs)
+    ops_a = map(dn -> load_hdf5_data(joinpath(dn, "data_micro.h5"), "ops"), micro_dirs)
+    params_d_a = map(load_metadata, micro_dirs)
 
-    adj_matrix_full_a = map(dn -> load_hdf5_data(joinpath(dn, "data_discrete.h5"), "adj_matrix"), discrete_dirs)
+    adj_matrix_full_a = map(dn -> load_hdf5_data(joinpath(dn, "data_micro.h5"), "adj_matrix"), micro_dirs)
     adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
-    N_discrete_a = map(ops -> size(ops, 1), ops_a)
+    N_micro_a = map(ops -> size(ops, 1), ops_a)
 
     function compute_weighted_avg(k)
       adj_matrix = adj_matrix_a[k]
       ops = ops_a[k]
-      N_discrete = N_discrete_a[k]
+      N_micro = N_micro_a[k]
 
       if !isnothing(adj_matrix)
         sharp_I = vec(sum(adj_matrix; dims=2))
@@ -410,7 +410,7 @@ function compare_peak2peak(
 
         return [sum(ops[:, k] .* sharp_I) ./ n_connections for k in axes(ops, 2)]
       else
-        return [sum(ops[:, k]) / (N_discrete - 1) for k in axes(ops, 2)]
+        return [sum(ops[:, k]) / (N_micro - 1) for k in axes(ops, 2)]
       end
     end
 
@@ -438,14 +438,14 @@ function compare_peak2peak(
     M.band!(ax2, r, left_bounds, right_bounds, alpha=0.2)
   end
 
-  for k in 1:K_mf
-    p2p = support_width_mf_a[k]
-    r = i_mf_a[k] * params_mf_a[k]["delta_t"]
-    M.lines!(ax1, r, p2p, label=labels_mf[k] * " rate: $(round(rates_mf_a[k]; digits=3))")
+  for k in 1:K_mfl
+    p2p = support_width_mfl_a[k]
+    r = i_mfl_a[k] * params_mfl_a[k]["delta_t"]
+    M.lines!(ax1, r, p2p, label=labels_mfl[k] * " rate: $(round(rates_mfl_a[k]; digits=3))")
 
-    M.hlines!(ax2, params_mf_a[k]["omega_inf_mf"])
+    M.hlines!(ax2, params_mfl_a[k]["omega_inf_mfl"])
     M.lines!(ax2, r, g_M1_a[k])
-    M.band!(ax2, r, map(v -> v[1], support_bounds_mf_a[k]), map(v -> v[2], support_bounds_mf_a[k]), alpha=0.2)
+    M.band!(ax2, r, map(v -> v[1], support_bounds_mfl_a[k]), map(v -> v[2], support_bounds_mfl_a[k]), alpha=0.2)
   end
 
   M.axislegend(ax1)

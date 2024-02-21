@@ -81,18 +81,18 @@ function plot_results(output_filename::String;
 
   if has_d
     micro_dir = micro_dirs[1]
-    ops = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
+    ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
     i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
     adj_matrix = load_hdf5_sparse(joinpath(micro_dir, "data.hdf5"), "adj_matrix")
     params_d_a = map(load_metadata, micro_dirs)
-    N_micro = size(ops, 1)
+    N_micro = size(ω, 1)
     if !isnothing(adj_matrix)
       @assert SpA.is_hermsym(adj_matrix, identity)
 
       adj_matrix_nnz = SpA.nnz(adj_matrix)
 
       sharp_I = vec(sum(adj_matrix; dims=2))
-      ω_inf_d = sum(ops[:, 1] .* sharp_I) ./ sum(sharp_I)
+      ω_inf_d = sum(ω[:, 1] .* sharp_I) ./ sum(sharp_I)
       xs = Vector{Float64}(undef, adj_matrix_nnz)
       ys = Vector{Float64}(undef, adj_matrix_nnz)
       ones_vector_d = ones(adj_matrix_nnz)
@@ -134,9 +134,9 @@ function plot_results(output_filename::String;
 
       end
 
-      get_xy(ops[:, 1])
+      get_xy(ω[:, 1])
     else
-      ω_inf_d = sum(ops[:, 1]) / N_micro
+      ω_inf_d = sum(ω[:, 1]) / N_micro
     end
   end
 
@@ -178,7 +178,7 @@ function plot_results(output_filename::String;
       right_x = [x_a[i][right_idc[i]] for i in 1:K_mfl]
 
       if has_d
-        return (left=min(minimum(obs_ops[]), minimum(left_x)), right=max(maximum(obs_ops[]), maximum(right_x)))
+        return (left=min(minimum(obs_ω[]), minimum(left_x)), right=max(maximum(obs_ω[]), maximum(right_x)))
       else
         return (left=minimum(left_x), right=maximum(right_x))
       end
@@ -216,15 +216,15 @@ function plot_results(output_filename::String;
 
   if has_d
     if center_histogram
-      obs_ops = M.@lift (ops[:, $obs_i] .+ ω_inf_mfl_a[1] .- ω_inf_d)
+      obs_ω = M.@lift (ω[:, $obs_i] .+ ω_inf_mfl_a[1] .- ω_inf_d)
     else
-      obs_ops = M.@lift ops[:, $obs_i]
+      obs_ω = M.@lift ω[:, $obs_i]
     end
-    obs_extrema_ops = M.@lift extrema($obs_ops)
+    obs_extrema_ω = M.@lift extrema($obs_ω)
 
-    ext_ops = M.@lift [-1; 1; $obs_ops...]
+    ext_ω = M.@lift [-1; 1; $obs_ω...]
 
-    M.hist!(ax1, ext_ops; bins=2 * N_mfl, normalization=:pdf)
+    M.hist!(ax1, ext_ω; bins=2 * N_mfl, normalization=:pdf)
     M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
 
     if !isnothing(adj_matrix)
@@ -287,7 +287,7 @@ function plot_results(output_filename::String;
     end
 
     if has_d && !isnothing(adj_matrix)
-      get_xy(obs_ops[])
+      get_xy(obs_ω[])
     end
 
     if !constant_g
@@ -338,14 +338,14 @@ function get_ω_inf_mfl(dir::String)
   return r
 end
 
-function compare_peak2peak(
+function compare_variance(
   meanfield_dir::String,
   micro_dir::String,
 )
-  return compare_peak2peak([meanfield_dir], [micro_dir])
+  return compare_variance([meanfield_dir], [micro_dir])
 end
 
-function compare_peak2peak(
+function compare_variance(
   meanfield_dirs::Vector{String},
   micro_dirs::Vector{String},
 )
@@ -369,83 +369,85 @@ function compare_peak2peak(
 
     N_a = map(f -> size(f, 1), f_a)
 
-    function build_x(N_mfl)
-      δx = 2 / N_mfl
-      x_l, x_r = -1 + 0.5δx, 1 - 0.5δx
-
-      return range(x_l, x_r, length=N_mfl)
-    end
-
     x_a = map(build_x, N_a)
 
-    ω_inf_mfl_init_a = map(dn -> get_ω_inf_mfl(dn), meanfield_dirs)
+    # ω_inf_mfl_init_a = map(dn -> get_ω_inf_mfl(dn), meanfield_dirs)
 
-    support_bounds_mfl_a = find_support_bounds(f_a, x_a)
-    support_width_mfl_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mfl_a]
+    #support_bounds_mfl_a = find_support_bounds(f_a, x_a)
+    #support_width_mfl_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mfl_a]
 
-    rates_mfl_a = [compute_p2p_rate(i_mfl_a[k], support_width_mfl_a[k], params_mfl_a[k]["delta_t"]; cutoff_time=0.25 * params_mfl_a[k]["delta_t"] * i_mfl_a[k][end]) for k in 1:K_mfl]
+    #rates_mfl_a = [compute_p2p_rate(i_mfl_a[k], support_width_mfl_a[k], params_mfl_a[k]["delta_t"]; cutoff_time=0.25 * params_mfl_a[k]["delta_t"] * i_mfl_a[k][end]) for k in 1:K_mfl]
 
-    g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "g_M1"), meanfield_dirs)
+    g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "g_M1_n"), meanfield_dirs)
+    f_var_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f_var"), meanfield_dirs)
 
   end
 
   if K_d > 0
     labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
     i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
-    ops_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "ops"), micro_dirs)
+    ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
     params_d_a = map(load_metadata, micro_dirs)
 
-    adj_matrix_full_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
-    adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
-    N_micro_a = map(ops -> size(ops, 1), ops_a)
+    adj_matrix_a = map(dn -> load_hdf5_sparse(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
+    #adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+    N_micro_a = map(ω -> size(ω, 1), ω_a)
 
     function compute_weighted_avg(k)
       adj_matrix = adj_matrix_a[k]
-      ops = ops_a[k]
+      ω = ω_a[k]
       N_micro = N_micro_a[k]
 
       if !isnothing(adj_matrix)
         sharp_I = vec(sum(adj_matrix; dims=2))
         n_connections = sum(sharp_I)
 
-        return [sum(ops[:, k] .* sharp_I) ./ n_connections for k in axes(ops, 2)]
+        return [sum(ω[:, k] .* sharp_I) ./ n_connections for k in axes(ω, 2)]
       else
-        return [sum(ops[:, k]) / (N_micro - 1) for k in axes(ops, 2)]
+        return [sum(ω[:, k]) / (N_micro - 1) for k in axes(ω, 2)]
       end
     end
 
+    function compute_variance(ω, centers)
+      N = size(ω, 1)
+      return vec(sum((ω .- centers') .^ 2; dims=1)) / (N - 1)
+    end
+
     ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
-    p2p_d_a = [peak2peak(ops; dims=1) for ops in ops_a]
-    extrema_d_a = [extrema(ops; dims=1) for ops in ops_a]
+    p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
+    extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
     rates_d_a = [compute_p2p_rate(i_d_a[k], p2p_d_a[k], params_d_a[k]["delta_t"]; cutoff_time=0.25 * params_d_a[k]["delta_t"] * i_d_a[k][end]) for k in 1:K_d]
+    variances_d_a = [compute_variance(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
 
   end
 
   set_makie_backend(:gl)
 
   fig = M.Figure(size=(1920, 1080))
-  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title=M.L"\max_i\;\omega_i - \min_i\;\omega_i")
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title=M.L"Variances")
   ax2 = M.Axis(fig[1, 2], xlabel="time", title=M.L"\omega_\inf \quad \min_i\; \omega_i \quad \max_i\; \omega_i")
 
   for k in 1:K_d
     r = i_d_a[k] * params_d_a[k]["delta_t"]
-    p2p = p2p_d_a[k]
-    M.lines!(ax1, r, p2p, label=labels_d[k] * " rate: $(round(rates_d_a[k]; digits=3))")
+    # p2p = p2p_d_a[k]
+    M.lines!(ax1, r, variances_d_a[k], label=labels_d[k] * " rate: $(round(rates_d_a[k]; digits=3))")
+    #M.lines!(ax1, r, p2p, label=labels_d[k] * " rate: $(round(rates_d_a[k]; digits=3))")
 
     M.lines!(ax2, r, ω_inf_d_a[k], label=labels_d[k])
-    left_bounds = vec(map(v -> v[1], extrema_d_a[k]))
-    right_bounds = vec(map(v -> v[2], extrema_d_a[k]))
-    M.band!(ax2, r, left_bounds, right_bounds, alpha=0.2)
+    # left_bounds = vec(map(v -> v[1], extrema_d_a[k]))
+    # right_bounds = vec(map(v -> v[2], extrema_d_a[k]))
+    M.band!(ax2, r, ω_inf_d_a[k] .- sqrt.(variances_d_a[k]), ω_inf_d_a[k] .+ sqrt.(variances_d_a[k]), alpha=0.2)
   end
 
   for k in 1:K_mfl
-    p2p = support_width_mfl_a[k]
     r = i_mfl_a[k] * params_mfl_a[k]["delta_t"]
-    M.lines!(ax1, r, p2p, label=labels_mfl[k] * " rate: $(round(rates_mfl_a[k]; digits=3))")
+    M.lines!(ax1, r, f_var_a[k], label=labels_mfl[k])
 
-    M.hlines!(ax2, params_mfl_a[k]["omega_inf_mfl"])
+    #M.lines!(ax1, r, p2p, label=labels_mfl[k] * " rate: $(round(rates_mfl_a[k]; digits=3))")
+    #M.hlines!(ax2, params_mfl_a[k]["omega_inf_mfl"])
+
     M.lines!(ax2, r, g_M1_a[k])
-    M.band!(ax2, r, map(v -> v[1], support_bounds_mfl_a[k]), map(v -> v[2], support_bounds_mfl_a[k]), alpha=0.2)
+    M.band!(ax2, r, g_M1_a[k] - sqrt.(f_var_a[k]), g_M1_a[k] + sqrt.(f_var_a[k]), alpha=0.2)
   end
 
   M.axislegend(ax1)

@@ -23,7 +23,7 @@ function main()
   δt = 1e-3
 
   # maximum number of time iterations
-  max_iter = 2_000
+  max_iter = 30_000
 
   ### INITIALIZATION ###
 
@@ -63,13 +63,13 @@ function main()
   init_micro_graph_type = :dorogovtsev_mendes
   init_micro_graph_args = (N_micro,)
 
-  # init_micro_graph_types = barabasi_albert
+  # init_micro_graph_type = barabasi_albert
   # init_micro_graph_args = (n, k)
   #
-  # init_micro_graph_types = erdos_renyi
+  # init_micro_graph_type = erdos_renyi
   # init_micro_graph_args = (n, d)
   #
-  # init_micro_graph_types = barbell_graph
+  # init_micro_graph_type = barbell_graph
   # init_micro_graph_args = (n - n ÷ 2, n ÷ 2)
 
   ## INITIALIZATION: MFL ##
@@ -367,26 +367,29 @@ end
 #          RUN          #
 #########################
 
-# params = main()
-#
-# suffix = "2_bumps_flatter"
-#
-# OpiForm.set_makie_backend(:gl)
-#
-# store_dir_micro = "results/test_micro_" * suffix
-# params_micro = params
-# OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
-#
-# store_dir_mfl = "results/test_meanfield_" * suffix
-# params_lLF = merge(params, (
-#   flux=:lLF, f_dependent_g=false,
-#   init_method_omega=:from_file,
-#   init_method_adj_matrix=:from_file,
-#   init_method_f=:from_kde_omega,
-#   init_method_g=:from_kde_adj_matrix,
-#   init_micro_filename = joinpath(store_dir_micro, "data.hdf5")
-# ))
-# OpiForm.MeanField.launch(store_dir_mfl, params_lLF; force=true)
+params = main()
+params = merge(params, (
+  init_micro_graph_type = :erdos_renyi,
+  init_micro_graph_args = (params.N_micro, params.N_micro ÷ 10)
+))
+suffix = "2_bumps_flatter"
+
+OpiForm.set_makie_backend(:gl)
+
+store_dir_micro = "results/test_micro_" * suffix
+params_micro = params
+OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
+
+store_dir_mfl = "results/test_meanfield_" * suffix
+params_lLF = merge(params, (
+  flux=:lLF, f_dependent_g=false,
+  init_method_omega=:from_file,
+  init_method_adj_matrix=:from_file,
+  init_method_f=:from_kde_omega,
+  init_method_g=:from_kde_adj_matrix,
+  init_micro_filename = joinpath(store_dir_micro, "data.hdf5")
+))
+OpiForm.MeanField.launch(store_dir_mfl, params_lLF; force=true)
 
 # params_lLF_fdg = merge(params, (flux=:lLF, f_dependent_g=true))
 # store_dir = "results/test_meanfield_fdg_" * suffix
@@ -417,11 +420,10 @@ OpiForm.plot_result("test_$(suffix).mp4";
 
 # Comvergence plots
 
-# OpiForm.compare_peak2peak(
-#   [
-#     "results/test_meanfield_" * suffix,
-#     "results/test_meanfield_fdg_" * suffix,
-#   ], [
-#     "results/test_micro_" * suffix,
-#   ]
-# )
+OpiForm.compare_variance(
+  [
+    "results/test_meanfield_" * suffix,
+  ], [
+    "results/test_micro_" * suffix,
+  ]
+)

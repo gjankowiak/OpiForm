@@ -333,6 +333,22 @@ function display_params(params::NamedTuple)
   @info r
 end
 
+function compute_f_stats(f::Vector{Float64}, g::Matrix{Float64}, x::AbstractVector)
+  g_M1_n = compute_g_M1_normalized(g, x)
+  f_var = compute_f_var(f, x, g_M1_n)
+  return (g_M1_n=g_M1_n, f_var=f_var)
+end
+
+function compute_g_M1_normalized(g::Matrix{Float64}, x::AbstractVector)
+  return sum(x .* g) / sum(g)
+end
+
+function compute_f_var(f::Vector{Float64}, x::AbstractVector, center::Float64)
+  δx = x[2] - x[1]
+  M2 = sum(f .* (x .- center) .^ 2) * δx
+  return M2
+end
+
 function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   if params_in.constant_g
     @warn "Parameter constant_g is deprecated!"
@@ -436,7 +452,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   store_f = [copy(f)]
   if !params.constant_g
     store_g = [(0, copy(g))]
-    store_g_M1 = [sum(x .* g) / sum(g)]
+    f_stats = compute_f_stats(f, g, x)
+    store_g_M1_n = [f_stats.g_M1_n]
+    store_f_var = [f_stats.f_var]
   end
 
   # Initial mass
@@ -600,7 +618,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       push!(store_i, i)
       push!(store_f, copy(f))
       if !params.constant_g
-        push!(store_g_M1, sum(x .* g) / sum(g))
+        f_stats = compute_f_stats(f, g, x)
+        push!(store_g_M1_n, f_stats.g_M1_n)
+        push!(store_f_var, f_stats.f_var)
         push!(store_g, (i, copy(g)))
         if length(store_g) > 100
           store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["g/$i" => g for (i, g) in store_g])
@@ -617,7 +637,8 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   if !params.constant_g
     append!(store_pairs,
       ["g/$i" => g for (i, g) in store_g],
-      ["g_M1" => store_g_M1]
+      ["f_var" => store_f_var],
+      ["g_M1_n" => store_g_M1_n]
     )
   end
 
@@ -632,7 +653,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   println(p)
 
   if !params.constant_g
-    p = UnicodePlots.lineplot(store_g_M1, width=100, height=30, name="∫∫ ω g(ω,m) dω dm")
+    p = UnicodePlots.lineplot(store_g_M1_n, width=100, height=30, name="∫∫ ω g(ω,m) dω dm")
     println(p)
   end
 

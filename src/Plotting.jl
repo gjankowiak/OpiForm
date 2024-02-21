@@ -87,6 +87,8 @@ function plot_results(output_filename::String;
     params_d_a = map(load_metadata, micro_dirs)
     N_micro = size(ω, 1)
     if !isnothing(adj_matrix)
+      graph = Graphs.SimpleGraphs.SimpleGraph(adj_matrix)
+
       @assert SpA.is_hermsym(adj_matrix, identity)
 
       adj_matrix_nnz = SpA.nnz(adj_matrix)
@@ -156,10 +158,12 @@ function plot_results(output_filename::String;
     ax2.xlabel = warning
 
     ax3 = M.Axis(fig[1:4, 3], aspect=1)
-    ax3.title = "f α f"
+    ax3.title = "graph"
+    M.hidedecorations!(ax3)
 
     g_bottom_left = fig[5, 1:1] = M.GridLayout()
-    g_bottom_right = fig[5, 2:3] = M.GridLayout()
+    g_bottom_mid = fig[5, 2:2] = M.GridLayout()
+    g_bottom_right = fig[5, 3:3] = M.GridLayout()
   else
     g_bottom_left = fig[5, 1:1] = M.GridLayout()
     g_bottom_right = fig[5, 2:2] = M.GridLayout()
@@ -210,7 +214,7 @@ function plot_results(output_filename::String;
       # M.Colorbar(fig[5, 2:2], hm; vertical=false)
     end
 
-    legend = M.Legend(g_bottom_left[1, 1], ax1)
+    # legend = M.Legend(g_bottom_left[1, 1], ax1)
 
   end
 
@@ -223,6 +227,10 @@ function plot_results(output_filename::String;
     obs_extrema_ω = M.@lift extrema($obs_ω)
 
     ext_ω = M.@lift [-1; 1; $obs_ω...]
+
+    cmap(x) = x < 0 ? M.Makie.RGB{Float64}(1.0, 1+x, 1+x) : M.Makie.RGB{Float64}(1-x, 1-x, 1.0)
+
+    node_colors = M.@lift cmap.($obs_ω)
 
     M.hist!(ax1, ext_ω; bins=2 * N_mfl, normalization=:pdf)
     M.vlines!(ax1, ω_inf_d, color=:grey, ls=0.5)
@@ -251,16 +259,12 @@ function plot_results(output_filename::String;
         #colormap=:ice,
         colormap=[M.to_color(:transparent); M.to_colormap(:ice)],
         weights=weights, colorrange=obs_max_g_a)
-      hb = M.hexbin!(ax3, obs_xs, obs_ys,
-        cellsize=cs_obs, strokewidth=0.5, strokecolor=:white, threshold=1,
-        #colormap=:ice,
-        colormap=[M.to_color(:transparent); M.to_colormap(:ice)],
-        weights=weights, colorrange=obs_max_g_a)
+      M.Colorbar(g_bottom_mid[1,1], hb; vertical=false)
 
-      M.Colorbar(fig[5, 3:3], hb; vertical=false)
+      GraphMakie.graphplot!(ax3, graph, node_color=node_colors)
 
       M.limits!(ax2, (-1, 1), (-1, 1))
-      M.limits!(ax3, (-1, 1), (-1, 1))
+      #M.limits!(ax3, (-1, 1), (-1, 1))
     end
   end
 
@@ -316,8 +320,8 @@ function plot_results(output_filename::String;
       M.xlims!(ax2, low=support.left, high=support.right)
       M.ylims!(ax2, low=support.left, high=support.right)
 
-      M.xlims!(ax3, low=support.left, high=support.right)
-      M.ylims!(ax3, low=support.left, high=support.right)
+      #M.xlims!(ax3, low=support.left, high=support.right)
+      #M.ylims!(ax3, low=support.left, high=support.right)
 
     else
       M.autolimits!(ax1)

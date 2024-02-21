@@ -10,10 +10,10 @@ function main()
   ### DISCRETIZATION ###
 
   # discretization size for the meanfield model
-  N_mfl = 101
+  N_mfl = 301
 
   # number of agents for the micro model
-  N_micro = 100
+  N_micro = 300
 
   # used for the sampling of f_init, α_init
   # beware that a full matrix N_sampling x N_sampling of floats will be allocated
@@ -23,7 +23,7 @@ function main()
   δt = 1e-3
 
   # maximum number of time iterations
-  max_iter = 30_000
+  max_iter = 5_000
 
   ### INITIALIZATION ###
 
@@ -100,10 +100,10 @@ function main()
   # f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
   #
   # flatter symmetric bumps (chebyshev)
-  # n_bumps = 2
-  # chebyshev_coeffs = zeros(n_bumps * 2 + 1)
-  # chebyshev_coeffs[end] = 1
-  # f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+  n_bumps = 2
+  chebyshev_coeffs = zeros(n_bumps * 2 + 1)
+  chebyshev_coeffs[end] = 1
+  f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # asymmetric bumps (chebyshev)
   # n_bumps = 3
@@ -112,11 +112,10 @@ function main()
   # f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # flatter asymmetric bumps (chebyshev)
-  n_bumps = 3
-  chebyshev_coeffs = zeros(n_bumps * 2)
-  chebyshev_coeffs[end] = 1
-  f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
-  f_init_func(x) = f_init_poly_unscaled(x)
+  # n_bumps = 3
+  # chebyshev_coeffs = zeros(n_bumps * 2)
+  # chebyshev_coeffs[end] = 1
+  # f_init_poly_unscaled = 2.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
 
   # more asymmetric bumps (chebyshev)
   # n_bumps = 3
@@ -126,6 +125,8 @@ function main()
   # chebyshev_coeffs[end] = 1
 
   #f_init_poly_unscaled = 1.0 - Polynomials.ChebyshevT{Float64}(chebyshev_coeffs)
+
+  f_init_func(x) = f_init_poly_unscaled(x)
 
   # Cosine
   # f_init_func = x -> 0.3 * (1e-3 + cos(2 * π * x))
@@ -369,8 +370,8 @@ end
 
 params = main()
 params = merge(params, (
-  init_micro_graph_type = :erdos_renyi,
-  init_micro_graph_args = (params.N_micro, params.N_micro ÷ 10)
+  init_micro_graph_type = :barabasi_albert,
+  init_micro_graph_args = (params.N_micro, 10)
 ))
 suffix = "2_bumps_flatter"
 

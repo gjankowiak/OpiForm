@@ -33,6 +33,7 @@ import GraphMakie
 
 import GLMakie
 import CairoMakie
+import GraphMakie
 
 import HDF5
 

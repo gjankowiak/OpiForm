@@ -228,7 +228,7 @@ function plot_results(output_filename::String;
 
     ext_ω = M.@lift [-1; 1; $obs_ω...]
 
-    cmap(x) = x < 0 ? M.Makie.RGB{Float64}(1.0, 1+x, 1+x) : M.Makie.RGB{Float64}(1-x, 1-x, 1.0)
+    cmap(x) = x < 0 ? M.Makie.RGB{Float64}(1.0, 1 + x, 1 + x) : M.Makie.RGB{Float64}(1 - x, 1 - x, 1.0)
 
     node_colors = M.@lift cmap.($obs_ω)
 
@@ -259,7 +259,7 @@ function plot_results(output_filename::String;
         #colormap=:ice,
         colormap=[M.to_color(:transparent); M.to_colormap(:ice)],
         weights=weights, colorrange=obs_max_g_a)
-      M.Colorbar(g_bottom_mid[1,1], hb; vertical=false)
+      M.Colorbar(g_bottom_mid[1, 1], hb; vertical=false)
 
       GraphMakie.graphplot!(ax3, graph, node_color=node_colors)
 
@@ -428,8 +428,8 @@ function compare_variance(
   set_makie_backend(:gl)
 
   fig = M.Figure(size=(1920, 1080))
-  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title=M.L"Variances")
-  ax2 = M.Axis(fig[1, 2], xlabel="time", title=M.L"\omega_\inf \quad \min_i\; \omega_i \quad \max_i\; \omega_i")
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Variances")
+  ax2 = M.Axis(fig[1, 2], xlabel="time", title=M.L"\int\int \omega g / \int\int g \pm \sqrt{\text{variance}} \qquad \sum_i \omega_i # I_i / \sum_i # I_i \pm \sqrt{\text{variance}}")
 
   for k in 1:K_d
     r = i_d_a[k] * params_d_a[k]["delta_t"]

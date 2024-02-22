@@ -74,11 +74,11 @@ function sample_poly_dist(poly::Polynomials.AbstractPolynomial, n::Int64)
 end
 
 """
-    scale_to_pdf(f::Function, x::Vector{Float64})
+    scale_to_pdf(f::Function, x::AbstractRange)
 
 Return the function x → f(x) / ∫f(x) dx, where the integration is done with a midpoint rule and params.N_sampling points.
 """
-function scale_to_pdf(f::Function, x::Vector{Float64})
+function scale_to_pdf(f::Function, x::AbstractRange)
   δx = x[2] - x[1]
   int_f = sum(f, x) / δx
   f_scaled(x) = f(x) / int_f
@@ -108,6 +108,7 @@ Return `n` samples from the probability distribution f/∫f discretized on a gri
 """
 function fast_sampling(f::Function, n::Int64, N_sampling::Int64)
   x = build_x(N_sampling)
+  @show extrema(x)
 
   f_x = f.(x)
 
@@ -129,7 +130,9 @@ function fast_sampling(f::Function, n::Int64, N_sampling::Int64)
       if idx_range.stop == 0
         # trial < accumulator[1]
         rand_left = -1
-        rand_right = accumulator[1]
+        rand_right = x[1]
+        samples[k+1] = rand_left + (rand_right - rand_left) * rand()
+        k += 1
       elseif idx_range.start == N_sampling
         # trial > accumulator[end], this should never happen
         samples[k+1] = 1
@@ -139,8 +142,8 @@ function fast_sampling(f::Function, n::Int64, N_sampling::Int64)
         # accumulator[idx_range.stop] < trial < accumulator[idx_range.start]
         # this should be the most common case.
         # We pick a sample uniformely between the two bounds
-        rand_left = accumulator[idx_range.stop]
-        rand_right = accumulator[idx_range.start]
+        rand_left = x[idx_range.stop]
+        rand_right = x[idx_range.start]
         samples[k+1] = rand_left + (rand_right - rand_left) * rand()
         k += 1
         continue
@@ -152,7 +155,10 @@ function fast_sampling(f::Function, n::Int64, N_sampling::Int64)
     end
   end
 
-  return samples
+  p = UnicodePlots.histogram(samples, title="Histogram for ω0", nbins=50, vertical=true)
+  @info p
+
+  return sort(samples)
 end
 
 """
@@ -163,10 +169,10 @@ Return a matrix `adj_matrix` with exactly `n` ones, where the entries are sample
 The returned matrix is symmetric if the `symmetric` flag is set.
 """
 function fast_sampling(params::NamedTuple, α::Matrix{Float64}, n::Int64; symmetric::Bool=true)
-  adj_matrix = SpA.zeros(Int64, params.N_micro, params.N_micro)
+  adj_matrix = SpA.spzeros(Int64, params.N_micro, params.N_micro)
 
   if !params.constant_α
-    accumulator = Vector{Float64}(undef, params.N_sampling^2)
+    accumulator = Vector{Float64}(undef, params.N_micro^2)
 
     cumsum!(accumulator, vec(α))
     accumulator ./= accumulator[end]
@@ -188,10 +194,10 @@ function fast_sampling(params::NamedTuple, α::Matrix{Float64}, n::Int64; symmet
         idx = rand(r)
       end
 
-      p, q = divrem(idx - 1, params.N_mfl)
+      p, q = divrem(idx - 1, params.N_micro)
       i, j = p + 1, q + 1
     else
-      i, j = rand(1:params.N_mfl), rand(1:params.N_mfl)
+      i, j = rand(1:params.N_micro), rand(1:params.N_micro)
     end
 
     if adj_matrix[i, j] == 0
@@ -229,9 +235,9 @@ function sample_g_init(params::NamedTuple, scaled_funcs::NamedTuple, ops::Vector
   if !params.constant_α
     # Compute all the couples g_init(ω_i, ω_j)
     if zero_diagonal
-      α_init_samples = [i == j ? 0.0 : scaled_funcs.scaled_funcs.α_init_func_scaled(ops[i], ops[j]) for i = 1:params.N_micro, j = 1:params.N_micro]
+      α_init_samples = [i == j ? 0.0 : scaled_funcs.α_init_func_scaled(ops[i], ops[j]) for i = 1:params.N_micro, j = 1:params.N_micro]
     else
-      α_init_samples = [scaled_funcs.scaled_funcs.α_init_func_scaled(ops[i], ops[j]) for i = 1:params.N_micro, j = 1:params.N_micro]
+      α_init_samples = [scaled_funcs.α_init_func_scaled(ops[i], ops[j]) for i = 1:params.N_micro, j = 1:params.N_micro]
     end
   else
     if zero_diagonal
@@ -242,7 +248,7 @@ function sample_g_init(params::NamedTuple, scaled_funcs::NamedTuple, ops::Vector
   end
 
   # DEFINITION G
-  f_ops_samples = scaled_funcs.scaled_funcs.f_init_func_scaled.(ops)
+  f_ops_samples = scaled_funcs.f_init_func_scaled.(ops)
   g_init_samples = f_ops_samples .* α_init_samples .* f_ops_samples' / params.connection_density
   sum_g_samples = sum(g_init_samples)
 
@@ -308,7 +314,7 @@ function scale_f_α(params::NamedTuple)
   f_init_func_scaled = scale_to_pdf(params.f_init_func, x)
 
   # DEFINITION G
-  g_init_unscaled_uni = (x -> _α(x[1], x[2]) * params.params.f_init_func(x[1]) * params.f_init_func(x[2]) / params.connection_density)
+  g_init_unscaled_uni = (x -> _α(x[1], x[2]) * params.f_init_func(x[1]) * params.f_init_func(x[2]) / params.connection_density)
   g_prefactor = OpiForm.scale_g_init(g_init_unscaled_uni)
   α_init_func_scaled = (ω, m) -> g_prefactor * _α(ω, m)
   # DEFINITION_G
@@ -334,10 +340,12 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       @assert size(ω_0) == (params.N_micro,) "The size of ω_0 from the file is different from N_micro ($(size(ω_0)) vs $(params.N_micro))"
     elseif params.init_method_omega == :from_sampling_f_init
       # Scale and sample f_init
+      @info "Sampling f_init to get ω_0"
       ω_0 = fast_sampling(params.f_init_func, params.N_micro, params.N_sampling)
     else
       throw("Unknown value $(params.init_method_omega) for parameter init_method_omega")
     end
+    @show extrema(ω_0)
     if params.init_method_adj_matrix == :from_file
       # Load adj_matrix from HDF5 file
       adj_matrix = load_hdf5_sparse(params.init_micro_filename, "adj_matrix")
@@ -346,7 +354,7 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       scaled_funcs = scale_f_α(params)
       adj_matrix = sample_g_init(params, scaled_funcs, ω_0)
     elseif params.init_method_adj_matrix == :from_graph
-      graph = getfield(Graphs.SimpleGraphs, params.init_micro_graph_type)(params.init_micro_graph_args...)
+      graph = getfield(Graphs.SimpleGraphs, params.init_micro_graph_type)(params.init_micro_graph_args...; params.init_micro_graph_kwargs...)
       adj_matrix = SpA.sparse(graph)
       @assert !isnothing(adj_matrix)
     else
@@ -354,6 +362,30 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
     end
     store_hdf5_data(joinpath(store_dir, "data.hdf5"), "omega_init", ω_0)
     store_hdf5_sparse(joinpath(store_dir, "data.hdf5"), "adj_matrix", adj_matrix)
+    CairoMakie.activate!()
+    cmap(x) = x < 0 ? CairoMakie.Makie.RGB{Float64}(1.0, 1 + x, 1 + x) : CairoMakie.Makie.RGB{Float64}(1 - x, 1 - x, 1.0)
+    node_colors = map(cmap, ω_0)
+    graph = Graphs.SimpleGraphs.SimpleGraph(adj_matrix)
+    n_edges = Graphs.ne(graph)
+    for layout in [:Stress, :Spring, :Shell]
+      layout_name = lowercase(string(layout))
+      if layout == :Stress && !Graphs.is_connected(graph)
+        @warn "The graph is not connected, skipping layout '$layout_name'"
+        continue
+      end
+      layout_fn = joinpath(store_dir, "graph_$(layout_name).svg")
+      try
+        fig = CairoMakie.Figure(size=(2000, 2000))
+        ax = CairoMakie.Axis(fig[1, 1])
+        CairoMakie.hidedecorations!(ax)
+        GraphMakie.graphplot!(ax, graph; layout=getfield(GraphMakie, layout)(), node_color=node_colors, alpha=0.1, edge_width=0.1)
+        CairoMakie.save(layout_fn, fig)
+        @info "Graph view saved at $(layout_fn)"
+      catch
+        @warn "Graph view failed with layout '$layout_name' (disconnected graph?)"
+      end
+    end
+    GLMakie.activate!()
   end
   if mode == :mfl
     x = build_x(params.N_mfl)
@@ -472,8 +504,7 @@ function prepare_directory(store_dir::String, params::NamedTuple, mode::Symbol; 
     TOML.print(metafile, meta)
   end
 
-  Serialization.serialize(joinpath(store_dir, "params.dat"), params)
-
   prepare_initial_data(store_dir, params, mode)
 
+  serialize_params(store_dir, params)
 end

@@ -307,8 +307,8 @@ function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, 
   µC = params.δx * sum(params.x' .* pC; dims=2) ./ chamberC_size
   µC_dst .= µC
 
-  EC_in = params.R_kern.(params.x, µ)
-  EC_out = params.P_kern.(µ, μC)
+  EC_in = params.R_func.(params.x .- µ)
+  EC_out = params.P_func.(µ .- μC)
 
   a_dst .= params.σ .* EB .+ (1 - params.σ) * (
     chamber_mass .* EC_in .+ chamberC_mass .* EC_out
@@ -371,12 +371,6 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     @warn "a is set constant!"
   end
 
-  for k in [:D_kern_factor, :R_kern_factor, :P_kern_factor]
-    if !isapprox(params_in[k], 1)
-      @warn("$k is not 1!")
-    end
-  end
-
   # Echo chamber mask matrix
   if params_in.EC_type == :characteristic
     EC_idx_span = Int(floor(min(N_mfl - 1, params_in.EC_ρ / δx)))
@@ -410,7 +404,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   end
 
   # Debate matrix
-  D_matrix = params_in.D_kern.(x, x')
+  D_matrix = params_in.D_func.(x .- x')
 
   # Threshold for small integrals, integrals smaller than this
   # will have their inverse treated as zero.

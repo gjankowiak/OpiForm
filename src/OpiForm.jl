@@ -69,6 +69,10 @@ end
 
 
 include("Utils.jl")
+
+include("Params.jl")
+import .Params
+
 include("Initialization.jl")
 include("Plotting.jl")
 include("Meanfield.jl")

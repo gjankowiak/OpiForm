@@ -154,21 +154,26 @@ end
 
 function store_hdf5_sparse(filename::String, key::String, A::SpA.SparseMatrixCSC)
   i, j, v = get_ijv(A)
+  (m, n) = size(A)
   HDF5.h5open(filename, "cw") do h5
     h5["$key/i"] = i
     h5["$key/j"] = j
     h5["$key/v"] = v
+    h5["$key/m"] = m
+    h5["$key/n"] = n
   end
 end
 
 function load_hdf5_sparse(filename::String, key::String)::SpA.SparseMatrixCSC
   h5 = HDF5.h5open(filename, "r")
   try
+    m = read(h5["$key/m"])
+    n = read(h5["$key/n"])
     i = read(h5["$key/i"])
     j = read(h5["$key/j"])
     v = read(h5["$key/v"])
     close(h5)
-    return SpA.sparse(i, j, v)
+    return SpA.sparse(i, j, v, m, n)
   catch
     close(h5)
     return nothing
@@ -198,4 +203,20 @@ end
 
 macro right(v, fill=0.0)
   return esc(:(SA.shiftedarray($v, -1, $fill)))
+end
+
+function display_params(params::NamedTuple)
+  r = ""
+  for k in keys(params)
+    r *= lpad(k, 30, ' ') * " => $(params[k])\n"
+  end
+  @info r
+end
+
+function serialize_params(store_dir::String, params::NamedTuple)
+  Serialization.serialize(joinpath(store_dir, "params.dat"), params)
+end
+
+function deserialize_params(store_dir::String)
+  return Serialization.deserialize(joinpath(store_dir, "params.dat"))
 end

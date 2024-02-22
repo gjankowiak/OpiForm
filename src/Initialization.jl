@@ -280,7 +280,7 @@ function sample_g_init(params::NamedTuple, scaled_funcs::NamedTuple, ops::Vector
   @info "Theoretical sparsity: $(params.connection_density)"
   @info "     Actual sparsity: $(SpA.nnz(adj_matrix)/params.N_micro/params.N_micro)"
 
-  @info "Discrepency Σ_j A_ij - #I_i (params.connection_density=$params.connection_density):"
+  @info "Discrepency Σ_j A_ij - #I_i (params.connection_density=$(params.connection_density)):"
   @info "\n" * string(UnicodePlots.histogram(discrepency; nbins=50, vertical=true))
 
   @info "Heat map, α_init(ω_i, ω_j):"

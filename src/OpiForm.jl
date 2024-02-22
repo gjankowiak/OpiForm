@@ -5,9 +5,6 @@ import UnicodePlots
 import Logging
 import LoggingExtras
 
-import BenchmarkTools
-import StatsBase
-
 import TOML
 
 import Graphs
@@ -36,8 +33,6 @@ import CairoMakie
 import GraphMakie
 
 import HDF5
-
-import Statistics
 
 macro fmt(v)
   r = string(v)

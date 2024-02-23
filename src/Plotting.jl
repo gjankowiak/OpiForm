@@ -22,13 +22,13 @@ function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float
   return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
 end
 
-function plot_result(output_filename::String; meanfield_dir::Union{String,Nothing}=nothing, micro_dir::Union{String,Nothing}=nothing, kwargs...)
+function plot_result(; output_filename::String="", meanfield_dir::Union{String,Nothing}=nothing, micro_dir::Union{String,Nothing}=nothing, kwargs...)
   mfl_dirs = isnothing(meanfield_dir) ? String[] : [meanfield_dir]
   d_dirs = isnothing(micro_dir) ? String[] : [micro_dir]
-  return plot_results(output_filename; meanfield_dirs=mfl_dirs, micro_dirs=d_dirs, kwargs...)
+  return plot_results(; output_filename=output_filename, meanfield_dirs=mfl_dirs, micro_dirs=d_dirs, kwargs...)
 end
 
-function plot_results(output_filename::String;
+function plot_results(; output_filename::String="",
   meanfield_dirs::Vector{String}=String[],
   micro_dirs::Vector{String}=String[],
   kwargs...)
@@ -75,11 +75,6 @@ function plot_results(output_filename::String;
         return meta["N_micro"]
       ), meanfield_dirs)
 
-    # ω_inf_mfl_a = map(dn -> (
-    #     meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
-    #     return meta["omega_inf_mfl"]
-    #   ), meanfield_dirs)
-
     N_a = map(f -> size(f, 1), f_a)
 
     obs_g_k = nothing
@@ -101,9 +96,10 @@ function plot_results(output_filename::String;
   if has_d
     micro_dir = micro_dirs[1]
     ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
-    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    i_d = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "i")
     adj_matrix = load_hdf5_sparse(joinpath(micro_dir, "data.hdf5"), "adj_matrix")
-    params_d_a = map(load_metadata, micro_dirs)
+    params_d = Params.from_toml(micro_dir)
+
     N_micro = size(ω, 1)
     if !isnothing(adj_matrix)
       graph = Graphs.SimpleGraphs.SimpleGraph(adj_matrix)
@@ -176,8 +172,19 @@ function plot_results(output_filename::String;
     ax2.title = "g(ω,m)"
     ax2.xlabel = warning
 
+    graph_source = if params_d.init_method_adj_matrix == :from_file
+      "(from file)"
+    elseif params_d.init_method_adj_matrix == :from_sampling_α_init
+      "(from α_init, connection_density=$(params_d.connection_density))"
+    elseif params_d.init_method_adj_matrix == :from_graph
+      "($(params_d.init_micro_graph_type)($(params_d.init_micro_graph_args); $(params_d.init_micro_graph_kwargs)))"
+    else
+      ""
+    end
+
+
     ax3 = M.Axis(fig[1:4, 3], aspect=1)
-    ax3.title = "graph"
+    ax3.title = "graph $graph_source"
     M.hidedecorations!(ax3)
 
     g_bottom_left = fig[5, 1:1] = M.GridLayout()
@@ -218,7 +225,6 @@ function plot_results(output_filename::String;
       max_g_a = 0.0
     end
 
-    #max_g_a = max(max_g_a, maximum(obs_fαf_a[1][]))
     obs_max_g_a = M.Observable((0.0, 1.05 * max_g_a))
 
     for k in 1:K_mfl
@@ -229,11 +235,7 @@ function plot_results(output_filename::String;
         if k == 1
         end
       end
-      # hm = M.heatmap!(ax3, x_a[k], x_a[k], obs_fαf_a[k], colorrange=obs_max_g_a, colormap=:ice)
-      # M.Colorbar(fig[5, 2:2], hm; vertical=false)
     end
-
-    # legend = M.Legend(g_bottom_left[1, 1], ax1)
 
   end
 
@@ -283,7 +285,6 @@ function plot_results(output_filename::String;
       GraphMakie.graphplot!(ax3, graph, node_color=node_colors)
 
       M.limits!(ax2, (-1, 1), (-1, 1))
-      #M.limits!(ax3, (-1, 1), (-1, 1))
     end
   end
 
@@ -348,8 +349,20 @@ function plot_results(output_filename::String;
 
   end
 
-  M.record(step_i, fig, output_filename, i_range)
-  @info ("movie saved at $output_filename")
+  effective_output_filename = if output_filename != ""
+    output_filename
+  else
+    anydir = vcat(meanfield_dirs, micro_dirs)[1]
+    prefix = if basename(anydir) == 0
+      dirname(dirname(anydir))
+    else
+      dirname(anydir)
+    end
+    "$prefix/movie.mp4"
+  end
+
+  M.record(step_i, fig, effective_output_filename, i_range)
+  @info ("movie saved at $effective_output_filename")
 
   println()
 
@@ -474,6 +487,14 @@ function compare_variance(
   end
 
   M.axislegend(ax1)
+
+  anydir = vcat(meanfield_dirs, micro_dirs)[1]
+  prefix = if basename(anydir) == 0
+    dirname(dirname(anydir))
+  else
+    dirname(anydir)
+  end
+  M.save("$prefix/comparison.png", fig)
 
   display(fig)
 

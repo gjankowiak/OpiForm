@@ -503,7 +503,7 @@ function prepare_directory(store_dir::String, params::NamedTuple, mode::Symbol; 
     @warn "git status failed"
   end
 
-  # TODO: move this
+  # TODO: remove this and fix Plotting.jl accordingly
   meta = Dict(
     "julia_version" => string(VERSION),
     "connection_density" => params.connection_density,
@@ -526,4 +526,6 @@ function prepare_directory(store_dir::String, params::NamedTuple, mode::Symbol; 
   prepare_initial_data(store_dir, params, mode)
 
   serialize_params(store_dir, params)
+
+  Params.to_toml(store_dir, params)
 end

@@ -337,21 +337,6 @@ function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, 
   end
 end
 
-function display_params(params::NamedTuple)
-  r = "Parameters:\n"
-  for (i, k) in enumerate(keys(params))
-    if k in [:g_init, :D_matrix, :x, :EC_mask_matrix, :ops_init, :adj_matrix]
-      continue
-    else
-      r *= "$k = $(params[k]), "
-      if i % 3 == 2
-        r *= "\n"
-      end
-    end
-  end
-  @info r
-end
-
 function compute_f_stats(f::Vector{Float64}, g::Matrix{Float64}, x::AbstractVector)
   g_M1_n = compute_g_M1_normalized(g, x)
   f_var = compute_f_var(f, x, g_M1_n)
@@ -493,8 +478,6 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   end
 
   ## Print parameters and plot initial conditions before starting
-
-  display_params(params)
 
   if abs(params.LF_relaxation - 1) > 1e-10
     @warn "LF_relaxation != 1 ($(params.LF_relaxation))"

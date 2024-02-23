@@ -225,9 +225,9 @@ macro right(v, fill=0.0)
 end
 
 function display_params(params::NamedTuple)
-  r = ""
+  r = "Parameters:\n"
   for k in keys(params)
-    r *= lpad(k, 30, ' ') * " => $(params[k])\n"
+    r *= rpad(k, 30, ' ') * " : $(params[k])\n"
   end
   @info r
 end

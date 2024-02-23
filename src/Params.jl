@@ -26,6 +26,8 @@ import Markdown: @md_str
 
 import Polynomials
 
+import TOML
+
 function f_init_func(ω::Float64)
   return exp(-10 * (ω + 0.5)^2) + 0.5 * exp(-15 * (ω - 0.5)^2) + 0.2
 end
@@ -133,15 +135,15 @@ DEFAULTS = OrderedCollections.OrderedDict(
     """
   ),
   :init_micro_filename => (
-    type=Union{Symbol,Nothing},
-    default=nothing,
+    type=String,
+    default="",
     desc=md"""
     filename pointing to the initial data for the micro system. Only used if `init_method_omega` or `init_method_adj_matrix` is set to :from\_file.
     """
   ),
   :init_mfl_filename => (
-    type=Union{Symbol,Nothing},
-    default=nothing,
+    type=String,
+    default="",
     desc=md"""
     filename pointing to the initial data for the meanfield system. Only used if `init_method_f` or `init_method_g` is set to :from\_file.
     """
@@ -164,7 +166,14 @@ DEFAULTS = OrderedCollections.OrderedDict(
     type=Symbol,
     default=:barabasi_albert,
     desc=md"""
-    symbol for the Graphs.jl constructor. See the Graphs.jl documentation [^1] for the possible values.
+    symbol for the Graphs.jl constructor. Good choices are
+
+    * `:dorogovtsev_mendes`, low degree for most nost nodes, a few nodes of high degree. Takes the number nodes as argument.
+    * `:barabasi_albert`, most nodes with degree k, but with fat tail (towards high degree). Takes `n` and `k` as arguments, where `n` is the number of nodes.
+    * `:erdos_renyi`, degree mostly the same for all nodes, given by `n`*`d`. Takes `n` and `d` as argument. 
+    * `:barbell_graph`, two complete subgraphs (cliques) of size `m` and `n`, connected by 1 edge. Takes `m` and `n` as arguments.
+
+    See the Graphs.jl documentation [^1] for the all possible values.
 
     [^1]: https://juliagraphs.org/Graphs.jl/dev/core\_functions/simplegraphs\_generators/
     """
@@ -173,7 +182,7 @@ DEFAULTS = OrderedCollections.OrderedDict(
     type=Tuple,
     default=(301, 10),
     desc=md"""
-    arguments to pass to the Graphs.jl constructor. See the Graphs.jl documentation [^1] for the possible values.
+    arguments to pass to the Graphs.jl constructor. This is always a `Tuple`, so for a single argument `n`, use `(n,)`. See the Graphs.jl documentation [^1] for the possible values.
 
     [^1]: https://juliagraphs.org/Graphs.jl/dev/core\_functions/simplegraphs\_generators/
     """
@@ -182,7 +191,7 @@ DEFAULTS = OrderedCollections.OrderedDict(
     type=Tuple,
     default=Dict{Symbol,Any}(),
     desc=md"""
-    keyword arguments to pass to the Graphs.jl constructor. See the Graphs.jl documentation [^1] for the possible values.
+    keyword arguments to pass to the Graphs.jl constructor. This is always a `Dict{Symbol,Any}`, use `Dict(:key => value)`. See the Graphs.jl documentation [^1] for the possible values.
 
     [^1]: https://juliagraphs.org/Graphs.jl/dev/core\_functions/simplegraphs\_generators/
     """
@@ -422,6 +431,45 @@ function describe()
   for (k, v) in DEFAULTS
     display_parameter_description(k, v)
   end
+end
+
+function to_toml(store_dir::String, params::NamedTuple)
+  function conv(value)
+    if value isa Tuple
+      array = Vector{Any}()
+      for item in value
+        push!(array, item)
+      end
+      return array
+    else
+      return string(value)
+    end
+  end
+  open(joinpath(store_dir, "params.toml"), "w") do f
+    TOML.print(conv, f, pairs(params))
+  end
+end
+
+function from_toml(store_dir::String)
+  p = open(joinpath(store_dir, "params.toml"), "r") do f
+    TOML.parse(f)
+  end
+  params = Dict{Symbol,Any}()
+  for (k, v) in p
+    key = Symbol(k)
+    key_type = DEFAULTS[key].type
+    if key_type == Symbol
+      params[key] = Symbol(v)
+    elseif key_type in [Int64, Float64, String, Bool]
+      params[key] = v
+    elseif key_type == Tuple
+      params[key] = Tuple(v)
+    else
+      params[key] = v
+      continue
+    end
+  end
+  return NamedTuple(params)
 end
 
 end # module Params

@@ -1,3 +1,22 @@
+# OpiForm, multimodel network-based opinion formation simulation
+#
+# Copyright (C) 2024  Gaspard Jankowiak
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
   idc = searchsortedfirst(i_a * δt, cutoff_time)
   return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])

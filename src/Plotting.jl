@@ -495,7 +495,12 @@ function compare_variance(
     dirname(anydir)
   end
   M.save("$prefix/comparison.png", fig)
+  @info "Plot saved at $prefix/comparison.png"
 
-  display(fig)
+  try
+    display(fig)
+  catch
+    @error "Cannot display plot window, are you logged in over SSH?"
+  end
 
 end

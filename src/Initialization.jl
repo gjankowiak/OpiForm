@@ -346,6 +346,75 @@ function scale_f_α(params::NamedTuple)
   )
 end
 
+# filter for NamedTuples only from v1.11
+filter_nt_fields = if VERSION < v"1.11"
+  (f, nt) -> begin
+    println(nt)
+    NamedTuple{filter(f, keys(nt))}(nt)
+  end
+else
+  filter
+end
+
+
+function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
+
+  lfr_kwargs_nt = (; lfr_kwargs...)
+
+  # The β distribution has support on [0, 1], these are helper functions to scale to and back from [0, 1]
+  scale_to_01 = x -> 0.5 * (x + 1)
+  scale_from_01 = x -> 2x - 1
+
+  GEN_KEYS = [:is_directed, :seed, :tau, :tau2, :nmin, :overlapping_nodes, :overlap_membership]
+  lfr_gen_kwargs = filter_nt_fields(in(GEN_KEYS), lfr_kwargs_nt)
+
+  g, c_ids = LFR.lancichinetti_fortunato_radicchi(params.N_micro, lfr_args...; lfr_gen_kwargs...)
+
+  idc_sort = sortperm(c_ids)
+  inv_idc_sort = invperm(idc_sort)
+  c_ids_sorted = c_ids[idc_sort]
+
+  n_communities = length(unique(c_ids_sorted))
+  #
+  # rescale bounds to [0, 1]
+  bounds = collect(lfr_kwargs_nt.µ_community_bounds)
+  bounds_01 = scale_to_01.(bounds)
+
+  if lfr_kwargs_nt.µ_community_distrib == :equidistributed
+    community_means = collect(range(bounds_01..., length=n_communities))[Random.randperm(n_communities)]
+  elseif lfr_kwargs_nt.μ_community_distrib == :uniform
+    community_means = rand(n_communities) * (bounds[2] - bounds[1]) + bounds[1]
+  else
+    @error "unkown value '$(lfr_kwargs_nt.μ_community_distrib)' for parameter µ_community_distrib"
+  end
+
+  ω_0 = zeros(params.N_micro)
+
+  got = 0
+
+  for i in 1:n_communities
+    µ = community_means[i]
+    σ² = lfr_kwargs_nt.β_σ²
+    ν = μ * (1 - μ) / σ² - 1
+    local a = μ * ν
+    local b = (1 - μ) * ν
+    beta_dist = Distributions.Beta(a, b)
+
+    idc = searchsorted(c_ids_sorted, i)
+
+    community_size = length(idc)
+
+    got += length(idc)
+
+    samples = Distributions.rand(beta_dist, community_size)
+    ω_0[idc] .= scale_from_01.(samples)
+  end
+
+  ω_0 = ω_0[inv_idc_sort]
+
+  return SpA.sparse(g), ω_0, c_ids
+end
+
 function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbol)
   if mode == :micro || (mode == :mfl && (params.init_method_f == :from_kde_omega || params.init_method_g == :from_kde_adj_matrix))
     if params.init_method_omega == :from_file
@@ -361,10 +430,12 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       # Scale and sample f_init
       @info "Sampling f_init to get ω_0"
       ω_0 = fast_sampling(params.f_init_func, params.N_micro, params.N_sampling)
+    elseif params.init_method_omega == :from_lfr
+      @assert params.init_method_adj_matrix == :from_lfr "init_method_omega set to :from_ldr but init_method_adj_matrix is not!"
     else
       throw("Unknown value $(params.init_method_omega) for parameter init_method_omega")
     end
-    @show extrema(ω_0)
+
     if params.init_method_adj_matrix == :from_file
       # Load adj_matrix from HDF5 file
       adj_matrix = load_hdf5_sparse(params.init_micro_filename, "adj_matrix")
@@ -376,16 +447,30 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       graph = getfield(Graphs.SimpleGraphs, params.init_micro_graph_type)(params.init_micro_graph_args...; params.init_micro_graph_kwargs...)
       adj_matrix = SpA.sparse(graph)
       @assert !isnothing(adj_matrix)
+    elseif params.init_method_adj_matrix == :from_lfr
+      adj_matrix, ω_0, c_ids = initialize_LFR(params, params.init_lfr_args...; params.init_lfr_kwargs...)
     else
       throw("Unknown value $(params.init_method_adj_matrix) for parameter init_method_adj_matrix")
     end
+
+    # store data
     store_hdf5_data(joinpath(store_dir, "data.hdf5"), "omega_init", ω_0)
     store_hdf5_sparse(joinpath(store_dir, "data.hdf5"), "adj_matrix", adj_matrix)
+
+    ##################
+    ### Plot graph ###
+    ##################
+
+    # Switch to CairoMakie
     CairoMakie.activate!()
+
+    # Define the colormap
     cmap(x) = x < 0 ? CairoMakie.Makie.RGB{Float64}(1.0, 1 + x, 1 + x) : CairoMakie.Makie.RGB{Float64}(1 - x, 1 - x, 1.0)
     node_colors = map(cmap, ω_0)
     graph = Graphs.SimpleGraphs.SimpleGraph(adj_matrix)
     n_edges = Graphs.ne(graph)
+
+    # Plot the graph using 3 different layouts
     for layout in [:Stress, :Spring, :Shell]
       layout_name = lowercase(string(layout))
       if layout == :Stress && !Graphs.is_connected(graph)
@@ -404,6 +489,39 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
         @warn "Graph view failed with layout '$layout_name' (disconnected graph?)"
       end
     end
+
+    if params.init_method_adj_matrix == :from_lfr
+      fig = CairoMakie.Figure(size=(2048, 1152))
+      c = CairoMakie.Makie.ColorSchemes.Paired_12.colors
+
+      n_colors = length(c)
+
+      cs = [c[1+(i%n_colors)] for i in c_ids]
+
+      n_communities = length(unique(c_ids))
+
+      ax1 = CairoMakie.Axis(fig[1, 1], title="LFR graph (colored by community)", xticklabelsvisible=false, yticklabelsvisible=false)
+      GraphMakie.graphplot!(ax1, graph; edge_width=0.1, node_color=cs, node_size=12)
+
+      ax2 = CairoMakie.Axis(fig[1, 3], title="LFR graph (colored by opinion)", xticklabelsvisible=false, yticklabelsvisible=false)
+      g_ops = GraphMakie.graphplot!(ax2, graph; edge_width=0.1, node_color=ω_0, node_size=12)
+      fig[2, 3] = cb = CairoMakie.Colorbar(fig, g_ops, label="Opinions", vertical=false)
+
+      ax3 = CairoMakie.Axis(fig[1, 2], title="Opinions histograms (aggregated by community)", xticklabelsvisible=true, yticklabelsvisible=false, xlabel=CairoMakie.L"\omega_i")
+      idc_sort = sortperm(c_ids)
+      c_ids_sorted = c_ids[idc_sort]
+      ω_0_sorted = ω_0[idc_sort]
+      for i in 1:n_communities
+        idc = searchsorted(c_ids_sorted, i)
+
+        CairoMakie.hist!(ax3, ω_0_sorted[idc], scale_to=1.0, offset=i, direction=:y, bins=range(-1, 1, 200), color=c[1+(i%n_communities)])
+      end
+
+      lfr_plot_fn = joinpath(store_dir, "graph_LFR.svg")
+      CairoMakie.save(lfr_plot_fn, fig)
+      @info "LFR Graph view saved at $(lfr_plot_fn)"
+    end
+
     GLMakie.activate!()
   end
   if mode == :mfl

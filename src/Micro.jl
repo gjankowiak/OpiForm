@@ -21,6 +21,8 @@ module Micro
 
 import HDF5
 import UnicodePlots
+import ArnoldiMethod as AM
+import LinearAlgebra as LA
 import ..OpiForm: prepare_directory, load_hdf5_data, store_hdf5_data, load_hdf5_sparse, @fmt
 
 # Move to parent?
@@ -90,11 +92,32 @@ function delta_EC_potential!(inc::Matrix{Float64}, params::NamedTuple, ω::Vecto
   inc[:, 2] = vec(sum(ω_diff; dims=2)) / (params.N_micro - 1)
 end
 
-function delta_EB!(inc::Matrix{Float64}, tmp::Matrix{Float64}, params::NamedTuple, ω::Vector{Float64}, ω_diff::Matrix{Float64}, adj_mat, neighbors::Vector{Int64})
+function compute_t_star(tmp::Matrix{Float64}, params::NamedTuple, adj_matrix, neighbors::Vector{Int64})
+  β = 1 - params.δt
+
+  # build the transition matrix B, such that ω(t+1) = B*ω(t)
+  if params.full_adj_matrix
+    tmp .= fill((1 - β) / (params.N_micro - 1), (params.N_micro, params.N_micro))
+  else
+    tmp .= (1 - β) * adj_matrix ./ neighbors
+  end
+  diag = view(tmp, LA.diagind(tmp))
+  diag .= β
+
+  # compute the 2 largest eigenvalue
+  evs = AM.partialschur(tmp, nev=6)[1].eigenvalues
+  λ₂ = evs[2]
+
+  # the number of iterations to consensus should be proportional to -1 / log(λ₂)
+  # this correspond to a time to consensus of -1 / log(λ₂) · δt
+  return -1 / log(λ₂) * params.δt
+end
+
+function delta_EB!(inc::Matrix{Float64}, tmp::Matrix{Float64}, params::NamedTuple, ω::Vector{Float64}, ω_diff::Matrix{Float64}, adj_matrix, neighbors::Vector{Int64})
   if params.full_adj_matrix
     tmp .= ω_diff
   else
-    tmp .= ω_diff .* adj_mat
+    tmp .= ω_diff .* adj_matrix
   end
   inc[:, 1] = vec(sum(params.D_func, tmp; dims=2)) ./ neighbors
 end
@@ -125,12 +148,16 @@ end
 
 function launch(store_dir::String, params::NamedTuple; force::Bool=false)
 
+  @info "Launching micro"
+
   prepare_directory(store_dir, params, :micro; force=force)
+
+  @info "Directory ready"
 
   ω = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "omega_init")
   adj_matrix = load_hdf5_sparse(joinpath(store_dir, "data.hdf5"), "adj_matrix")
 
-  i = 1
+  i = 0
 
   ω_diff = Matrix{Float64}(undef, params.N_micro, params.N_micro)
   tmp = Matrix{Float64}(undef, params.N_micro, params.N_micro)
@@ -138,9 +165,16 @@ function launch(store_dir::String, params::NamedTuple; force::Bool=false)
   if params.full_adj_matrix
     neighbors = fill(params.N_micro - 1, (params.N_micro,))
   else
-    neighbors = Vector{Int64}(vec(max.(1, sum(adj_matrix; dims=2) .- 1)))
+    # check that the adjacency matrix has zero diagonal
+    adj_matrix_diag = view(adj_matrix, LA.diagind(adj_matrix))
+    @assert iszero(adj_matrix_diag) "The network has self-interactions!"
+    neighbors = Vector{Int64}(vec(sum(adj_matrix; dims=2)))
   end
-  @info neighbors[1]
+
+  @assert all(>(0), neighbors) "The network has isolated agents!"
+
+  T_star = compute_t_star(tmp, params, adj_matrix, neighbors)
+  @show T_star
 
   # increment
   # 1st column: EB                   | (Debate)
@@ -160,6 +194,7 @@ function launch(store_dir::String, params::NamedTuple; force::Bool=false)
     end
 
     compute_diffs!(ω_diff, params, ω)
+
 
     if params.σ < 1
       throw("Not implemented")

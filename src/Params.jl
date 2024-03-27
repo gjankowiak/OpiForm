@@ -95,17 +95,21 @@ DEFAULTS = OrderedCollections.OrderedDict(
     initialization method for ω (micro model).
     * :from\_file, a HDF5 file should be provided with the `init_micro_filename` parameter. ω is read from the "omega/\$init\_micro\_iter" key. The size of the vector should match `N_micro`.
     * :from\_sampling\_f\_init, ω will be initialized by drawing `N_micro` samples from the function defined in `f_init_func`.
+    * :from\_LFR, for each community `c` in the LFR graph, draw the opinion from the beta distribution with expectation `µ_c`, where the community expectation `µ_c` is drawn from [-1, 1]. See `init_lfr_args` for details.
     """
   ),
   :init_method_adj_matrix => (
     type=Symbol,
-    values=[:from_file, :from_sampling_α_init, :from_graph],
+    values=[:from_file, :from_sampling_α_init, :from_graph, :from_lfr],
     default=:from_sampling_α_init,
     desc=md"""
     initialization method for the adjacency matrix.
     * :from\_file, a HDF5 file should be provided with the `init_micro_filename` parameter. The adjacency matrix is read from the "adj\_matrix" key. The size of the matrix should be `N_micro` x `N_micro`.
     * :from\_sampling\_α\_init, sample entries from `α_init_func`. The number of non-zero entries will be determined from `N_micro` and `connection_density`. 
     * :from\_graph, a graph will be generated according to the `init_micro_graph_type` option and its adjacency matrix will be used. 
+    * :from\_LFR, generate a  Lancichinetti-Fortunato-Radicchi model benchmarks graph (using LFRBenchmarkGraphs.jl [^1])
+
+    [^1] https://fcdimitr.github.io/LFRBenchmarkGraphs.jl/stable/
     """
   ),
   :init_method_f => (
@@ -194,6 +198,36 @@ DEFAULTS = OrderedCollections.OrderedDict(
     keyword arguments to pass to the Graphs.jl constructor. This is always a `Dict{Symbol,Any}`, use `Dict(:key => value)`. See the Graphs.jl documentation [^1] for the possible values.
 
     [^1]: https://juliagraphs.org/Graphs.jl/dev/core\_functions/simplegraphs\_generators/
+    """
+  ),
+  :init_lfr_args => (
+    type=Tuple,
+    default=(div(301, 10), div(301, 5)),
+    desc=md"""
+    (k_avg::Integer, k_max::Integer)
+    2nd and 3rd arguments to pass to the LFRBenchmarkGraphs.jl constructor, see the documentation [^1] for the possible values.
+
+    [^1]: https://fcdimitr.github.io/LFRBenchmarkGraphs.jl/stable/
+    """
+  ),
+  :init_lfr_kwargs => (
+    type=NamedTuple,
+    default=(
+      μ_community_distrib=:equidistributed,
+      μ_community_bounds=(-1 + 5e-2, 1 - 5e-2),
+      β_σ²=1e-2
+    ),
+    desc=md"""
+    keyword arguments to pass to the LFRBenchmarkGraphs.jl constructor, see the documentation [^1] for the possible values.
+    Some other arguments can be passed:
+
+    * `µ_community_distrib`: how `μ_community` is sampled. Can be:
+        * `:equidistributed` (default), the samples are computed as `range(µ_community_bounds...; length=n_communities)`
+        * `:uniform`, the samples are draw uniformely from the interval given by `μ_community_bounds`.
+    * `µ_community_bounds`: the bounds for the expectation `μ_community`
+    * `β_σ²`: the variance for the β distribution use to samples `ω_i`
+
+    [^1]: https://fcdimitr.github.io/LFRBenchmarkGraphs.jl/stable/
     """
   ),
   :f_init_func => (

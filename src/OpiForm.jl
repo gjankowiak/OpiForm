@@ -43,13 +43,16 @@ import LinearAlgebra as LA
 
 import Serialization
 
+import LFRBenchmarkGraphs as LFR
+import Random
+import Distributions
+
 import KernelDensity
 import Graphs
 import GraphMakie
 
 import GLMakie
 import CairoMakie
-import GraphMakie
 
 import HDF5
 

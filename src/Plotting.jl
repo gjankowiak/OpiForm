@@ -144,7 +144,7 @@ function plot_results(; output_filename::String="",
         end
 
         if half_connection_matrix
-          obs_xs[] = view(xs, 1:got)
+          obs_xs.val = view(xs, 1:got)
           obs_ys[] = view(ys, 1:got)
           obs_ones_vector_d[] = view(ones_vector_d, 1:got)
         end
@@ -272,7 +272,7 @@ function plot_results(; output_filename::String="",
       # So the correct mapping from number of observation per cell to value is
       # i -> i / avg_obs * ∫∫g/|Ω²| = i/(adj_matrix_nnz * A)
       obs_particle_weight = M.@lift 1 / ($hex_area * adj_matrix_nnz)
-      obs_particle_weight_rounded = M.@lift round($obs_particle_weight; digits=3)
+      # obs_particle_weight_rounded = M.@lift round($obs_particle_weight; digits=3)
       weights = M.@lift $obs_particle_weight * $obs_ones_vector_d
 
       hb = M.hexbin!(ax2, obs_xs, obs_ys,

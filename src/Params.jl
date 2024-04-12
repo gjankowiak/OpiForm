@@ -28,14 +28,23 @@ import Polynomials
 
 import TOML
 
-function f_init_func(ω::Float64)
+function f_init_func_exp(ω::Float64)
   return exp(-10 * (ω + 0.5)^2) + 0.5 * exp(-15 * (ω - 0.5)^2) + 0.2
+end
+
+function f_init_func_cosine(ω::Float64)
+  h = (x) -> abs(x) <= 1 ? 0.5 * (1 - cos(π * (x - 1))) : 0.0
+  return 0.5 * h(4 * (ω - 0.5)) + h(3(ω + 0.50))
 end
 
 function α_init_func(ω::Float64, m::Float64)
   stddev = 0.3
   r = exp(-(ω - m)^2 / stddev^2) + 0.4
   return r
+end
+
+function g_init_func(ω::Float64, m::Float64)
+  return 1.0
 end
 
 # Debate kernel (for epistemic bubbles)
@@ -127,7 +136,7 @@ DEFAULTS = OrderedCollections.OrderedDict(
   ),
   :init_method_g => (
     type=Symbol,
-    values=[:from_file, :from_α_init, :from_kde_adj_matrix],
+    values=[:from_file, :from_α_init, :from_g_init, :from_kde_adj_matrix],
     default=:from_kde_omega,
     desc=md"""
     initialization method for f.
@@ -135,6 +144,7 @@ DEFAULTS = OrderedCollections.OrderedDict(
     Possible values:
     * :from\_file, a HDF5 file should be provided with the `init_mfl_filename` parameter. The initial value is read from the "g/\$init\_mfl\_iter" key. The size of the matrix should be `N_mfl` x `N_mfl`.
     * :from\_α\_init, the function in the `α_init_func` parameter is evaluated on a regular grid of size `N_mfl` x `N_mfl`. The initial value for g is then f\_init * α\_init * f\_init' / connection\_density.
+    * :from\_g\_init, the function in the `g_init_func` parameter is evaluated on a regular grid of size `N_mfl` x `N_mfl`.
     * :from\_kde\_adj\_matrix, perform a Kernel Density Estimation based on ω and the adjacency matrix using the KernelDensity.jl package.
     """
   ),
@@ -180,6 +190,13 @@ DEFAULTS = OrderedCollections.OrderedDict(
     See the Graphs.jl documentation [^1] for the all possible values.
 
     [^1]: https://juliagraphs.org/Graphs.jl/dev/core\_functions/simplegraphs\_generators/
+    """
+  ),
+  :init_micro_graph_max_tries => (
+    type=Int64,
+    default=10,
+    desc=md"""
+    graph generation will be attempted this many times until the graph is connected
     """
   ),
   :init_micro_graph_args => (
@@ -230,9 +247,24 @@ DEFAULTS = OrderedCollections.OrderedDict(
     [^1]: https://fcdimitr.github.io/LFRBenchmarkGraphs.jl/stable/
     """
   ),
+  :init_lfr_max_tries => (
+    type=Int64,
+    default=10,
+    desc=md"""
+    LFR graph generation will be attempted this many times until the graph has has many communities as specified by `init_lfr_target_n_communities`.
+    """
+  ),
+  :init_lfr_target_n_communities => (
+    type=Int64,
+    default=0,
+    desc=md"""
+    If positive, require the LFR graph to have this number of communities.
+    If no admissible graph has been generated after `init_lfr_max_tries`, throws ErrorException.
+    """
+  ),
   :f_init_func => (
     type=Function,
-    default=f_init_func,
+    default=f_init_func_cosine,
     desc=md"""
     function $[-1, 1] \to \mathbb{R}_+$ to initialize `f`. Will be normalized for you.
     """
@@ -242,6 +274,13 @@ DEFAULTS = OrderedCollections.OrderedDict(
     default=α_init_func,
     desc=md"""
     function $[-1, 1] \times [-1, 1] \to \mathbb{R}_+$ to initialize `g`. Will be normalized for you. See also the `connection_density` parameter.
+    """
+  ),
+  :g_init_func => (
+    type=Function,
+    default=g_init_func,
+    desc=md"""
+    function $[-1, 1] \times [-1, 1] \to \mathbb{R}_+$ to initialize `g`. Will NOT be normalized.
     """
   ),
   :constant_α => (
@@ -280,6 +319,13 @@ DEFAULTS = OrderedCollections.OrderedDict(
     be `connection_density`, i.e. `connection_density` *should be less than 1*!
     """
   ),
+  :mfl_connectivity_factor => (
+    type=Float64,
+    default=1.0,
+    desc=md"""
+    scaling factor for the time derivative of f and g
+    """
+  ),
   :plot_scale => (
     type=Function,
     default=identity,
@@ -300,6 +346,13 @@ DEFAULTS = OrderedCollections.OrderedDict(
     default=10,
     desc=md"""
     one every `store_every_iter` iteration will be saved to disk.
+    """
+  ),
+  :store_g => (
+    type=Bool,
+    default=true,
+    desc=md"""
+    whether to save `g` (the main contribution to disk usage)
     """
   ),
   :σ => (
@@ -475,6 +528,8 @@ function to_toml(store_dir::String, params::NamedTuple)
         push!(array, item)
       end
       return array
+    elseif value isa NamedTuple
+      return Dict(pairs(value))
     else
       return string(value)
     end
@@ -498,6 +553,18 @@ function from_toml(store_dir::String)
       params[key] = v
     elseif key_type == Tuple
       params[key] = Tuple(v)
+    elseif key_type == NamedTuple
+      try
+        params[key] = NamedTuple(v)
+      catch
+        try
+          k = tuple(map(Symbol, collect(keys(v)))...)
+          vals = collect(values(v))
+          params[key] = NamedTuple{k}(vals)
+        catch
+          params[key] = v
+        end
+      end
     else
       params[key] = v
       continue

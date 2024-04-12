@@ -16,10 +16,23 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+function p_to_color(p; pmin=0, pmax=1, mapping=identity, color_min=M.RGBf(0.25, 0.25, 0.25), color_max=M.RGBf(0.0, 0.0, 1.0), reverse=false)
+  λ = (mapping(p) - mapping(pmin)) / (mapping(pmax) - mapping(pmin))
+  if reverse
+    return λ * color_min + (1 - λ) * color_max
+  else
+    return (1 - λ) * color_min + λ * color_max
+  end
+end
 
-function compute_p2p_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
+function compute_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
   idc = searchsortedfirst(i_a * δt, cutoff_time)
-  return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
+  return log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
+end
+
+function compute_stddev(ω, centers)
+  N = size(ω, 1)
+  return sqrt.(vec(sum((ω .- centers') .^ 2; dims=1)) / N)
 end
 
 function plot_result(; output_filename::String="", meanfield_dir::Union{String,Nothing}=nothing, micro_dir::Union{String,Nothing}=nothing, kwargs...)
@@ -288,14 +301,20 @@ function plot_results(; output_filename::String="",
     end
   end
 
-  i_range = enumerate(i_mfl_a[1])
 
-  function step_i(tuple)
+  stride = get(kwargs, :stride, 1)
+  first_idx = get(kwargs, :first_idx, 1)
+  last_idx = get(kwargs, :last_idx, lastindex(i_mfl_a[1]))
+  i_range = enumerate([first_idx:stride:last_idx; last_idx])
 
-    i, iter = tuple
+  function step_i(ii_i_tuple)
 
-    pct = lpad(Int(round(100 * i / length(i_range))), 3, " ")
-    print("  Creating movie: $pct%" * "\b"^50)
+    ii, i = ii_i_tuple
+
+    iter = i_mfl_a[1][i]
+
+    pct = lpad(Int(round(100 * ii / length(i_range))), 3, " ")
+    print("  Creating movie: $pct%" * "\b"^50 * ", current iteration: $iter")
 
     if has_mfl && any(f -> any(isnan, f[:, i]), f_a)
       return
@@ -412,8 +431,6 @@ function compare_variance(
     #support_bounds_mfl_a = find_support_bounds(f_a, x_a)
     #support_width_mfl_a = [map(x -> x[2] - x[1], s) for s in support_bounds_mfl_a]
 
-    #rates_mfl_a = [compute_p2p_rate(i_mfl_a[k], support_width_mfl_a[k], params_mfl_a[k]["delta_t"]; cutoff_time=0.25 * params_mfl_a[k]["delta_t"] * i_mfl_a[k][end]) for k in 1:K_mfl]
-
     g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "g_M1_n"), meanfield_dirs)
     f_var_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f_var"), meanfield_dirs)
 
@@ -446,13 +463,13 @@ function compare_variance(
 
     function compute_variance(ω, centers)
       N = size(ω, 1)
-      return vec(sum((ω .- centers') .^ 2; dims=1)) / (N - 1)
+      return vec(sum((ω .- centers') .^ 2; dims=1)) / N
     end
 
     ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
     p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
     extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
-    rates_d_a = [compute_p2p_rate(i_d_a[k], p2p_d_a[k], params_d_a[k]["delta_t"]; cutoff_time=0.25 * params_d_a[k]["delta_t"] * i_d_a[k][end]) for k in 1:K_d]
+    rates_d_a = [compute_rate(i_d_a[k], p2p_d_a[k], params_d_a[k]["delta_t"]; cutoff_time=0.25 * params_d_a[k]["delta_t"] * i_d_a[k][end]) for k in 1:K_d]
     variances_d_a = [compute_variance(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
 
   end
@@ -477,7 +494,7 @@ function compare_variance(
 
   for k in 1:K_mfl
     r = i_mfl_a[k] * params_mfl_a[k]["delta_t"]
-    M.lines!(ax1, r, f_var_a[k], label=labels_mfl[k])
+    M.lines!(ax1, r, f_var_a[k], label=labels_mfl[k], linestyle=:dot)
 
     #M.lines!(ax1, r, p2p, label=labels_mfl[k] * " rate: $(round(rates_mfl_a[k]; digits=3))")
     #M.hlines!(ax2, params_mfl_a[k]["omega_inf_mfl"])
@@ -488,13 +505,10 @@ function compare_variance(
 
   M.axislegend(ax1)
 
-  anydir = vcat(meanfield_dirs, micro_dirs)[1]
-  prefix = if basename(anydir) == 0
-    dirname(dirname(anydir))
-  else
-    dirname(anydir)
-  end
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
   M.save("$prefix/comparison.png", fig)
+  M.save("$prefix/comparison.svg", fig)
   @info "Plot saved at $prefix/comparison.png"
 
   try
@@ -503,4 +517,955 @@ function compare_variance(
     @error "Cannot display plot window, are you logged in over SSH?"
   end
 
+end
+
+function compare_variance_er(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String},
+)
+
+  # check that the dirs actually exist
+  @assert all(isdir, meanfield_dirs)
+  @assert all(isdir, micro_dirs)
+
+  K_mfl, K_d = length(meanfield_dirs), length(micro_dirs)
+
+  if K_mfl == 0 && K_d == 0
+    @error "No dir provided"
+    return
+  end
+
+  if K_mfl > 0
+    labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
+    params_mfl_a = map(Params.from_toml, meanfield_dirs)
+    er_mfl_p_a = map(x -> x.init_micro_graph_args[2], params_mfl_a)
+
+    N_a = map(f -> size(f, 1), f_a)
+
+    x_a = map(build_x, N_a)
+
+    g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "g_M1_n"), meanfield_dirs)
+    f_var_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f_var"), meanfield_dirs)
+    rates_mfl_a = [compute_rate(i_mfl_a[k], f_var_a[k], params_mfl_a[k].δt; cutoff_time=(1 / 6) * params_mfl_a[k].δt * i_mfl_a[k][end]) for k in 1:K_mfl]
+    # FIXME: be less lazy and get the actual value of N_micro
+    mfl_scaling_a = binomial(params_mfl_a[1].N_micro, 2) * er_mfl_p_a / params_mfl_a[1].N_micro^2
+    rates_mfl_rescaled_a = mfl_scaling_a .* rates_mfl_a
+
+  end
+
+
+  if K_d > 0
+    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
+    params_d_a = map(Params.from_toml, micro_dirs)
+    er_d_p_a = map(x -> x.init_micro_graph_args[2], params_d_a)
+
+    adj_matrix_a = map(dn -> load_hdf5_sparse(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
+    #adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+    N_micro_a = map(ω -> size(ω, 1), ω_a)
+
+    function compute_weighted_avg(k)
+      adj_matrix = adj_matrix_a[k]
+      ω = ω_a[k]
+      N_micro = N_micro_a[k]
+
+      if !isnothing(adj_matrix)
+        sharp_I = vec(sum(adj_matrix; dims=2))
+        n_connections = sum(sharp_I)
+
+        return [sum(ω[:, k] .* sharp_I) ./ n_connections for k in axes(ω, 2)]
+      else
+        return [sum(ω[:, k]) / (N_micro - 1) for k in axes(ω, 2)]
+      end
+    end
+
+    function compute_variance(ω, centers)
+      N = size(ω, 1)
+      return vec(sum((ω .- centers') .^ 2; dims=1)) / N
+    end
+
+
+    ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
+    p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
+    extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
+    variances_d_a = [compute_variance(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
+    rates_d_a = [compute_rate(i_d_a[k], variances_d_a[k], params_d_a[k].δt; cutoff_time=(1 / 6) * params_d_a[k].δt * i_d_a[k][end]) for k in 1:K_d]
+
+  end
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Variances")
+  ax2 = M.Axis(fig[1, 2], xlabel="p (Erdos-Renyi)", title="Convergence rates", xscale=log10, yscale=identity)
+
+  M.ylims!(ax1, (1e-5, 1))
+  M.xlims!(ax1, (nothing, 10.0))
+
+  for k in 1:K_d
+    r = i_d_a[k] * params_d_a[k].δt
+    # p2p = p2p_d_a[k]
+    M.lines!(ax1, r, variances_d_a[k], label=labels_d[k] * " p = $(round(er_d_p_a[k]; digits=3))", color=p_to_color(er_d_p_a[k]; mapping=log10, pmin=1e-3, pmax=1))
+    #M.lines!(ax1, r, p2p, label=labels_d[k] * " rate: $(round(rates_d_a[k]; digits=3))")
+
+    M.lines!(ax2, er_d_p_a, rates_d_a)
+  end
+
+  for k in 1:K_mfl
+    r = i_mfl_a[k] * params_mfl_a[k].δt
+    M.lines!(ax1, r, f_var_a[k], label=labels_mfl[k] * " p = $(round(er_mfl_p_a[k]; digits=3))", linestyle=:dot, color=p_to_color(er_mfl_p_a[k]; mapping=log10, pmin=1e-3, pmax=1))
+    M.lines!(ax2, er_mfl_p_a, rates_mfl_a, label="MFL")
+    # M.lines!(ax2, er_mfl_p_a, rates_mfl_rescaled_a, label="MFL (rescaled)")
+  end
+
+  #M.axislegend(ax1)
+
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
+  M.save("$prefix/comparison2.png", fig)
+  M.save("$prefix/comparison2.svg", fig)
+  @info "Plot saved at $prefix/comparison2.png"
+
+  try
+    display(fig)
+  catch
+    @error "Cannot display plot window, are you logged in over SSH?"
+  end
+end
+
+function compare_variance_ws(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String},
+)
+
+  # check that the dirs actually exist
+  @assert all(isdir, meanfield_dirs)
+  @assert all(isdir, micro_dirs)
+
+  K_mfl, K_d = length(meanfield_dirs), length(micro_dirs)
+
+  if K_mfl == 0 && K_d == 0
+    @error "No dir provided"
+    return
+  end
+
+  if K_mfl > 0
+    labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
+    params_mfl_a = map(Params.from_toml, meanfield_dirs)
+    ws_mfl_k_a = map(x -> round(Int64, 999 * x.init_micro_graph_args[2]), params_mfl_a)
+
+    N_a = map(f -> size(f, 1), f_a)
+
+    x_a = map(build_x, N_a)
+
+    g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "g_M1_n"), meanfield_dirs)
+    f_var_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f_var"), meanfield_dirs)
+    rates_mfl_a = [compute_rate(i_mfl_a[k], f_var_a[k], params_mfl_a[k].δt; cutoff_time=(1 / 6) * params_mfl_a[k].δt * i_mfl_a[k][end]) for k in 1:K_mfl]
+    # FIXME: be less lazy and get the actual value of N_micro
+    # mfl_scaling_a = binomial(params_mfl_a[1].N_micro, 2) * er_mfl_p_a / params_mfl_a[1].N_micro^2
+    # rates_mfl_rescaled_a = mfl_scaling_a .* rates_mfl_a
+
+  end
+
+
+  if K_d > 0
+    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
+    params_d_a = map(Params.from_toml, micro_dirs)
+    ws_d_k_a = map(x -> round(Int64, (params_d_a[1].N_micro - 1) * x.init_micro_graph_args[2]), params_d_a)
+
+    adj_matrix_a = map(dn -> load_hdf5_sparse(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
+    #adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+    N_micro_a = map(ω -> size(ω, 1), ω_a)
+
+    function compute_weighted_avg(k)
+      adj_matrix = adj_matrix_a[k]
+      ω = ω_a[k]
+      N_micro = N_micro_a[k]
+
+      if !isnothing(adj_matrix)
+        sharp_I = vec(sum(adj_matrix; dims=2))
+        n_connections = sum(sharp_I)
+
+        return [sum(ω[:, k] .* sharp_I) ./ n_connections for k in axes(ω, 2)]
+      else
+        return [sum(ω[:, k]) / (N_micro - 1) for k in axes(ω, 2)]
+      end
+    end
+
+    function compute_variance(ω, centers)
+      N = size(ω, 1)
+      return vec(sum((ω .- centers') .^ 2; dims=1)) / N
+    end
+
+
+    ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
+    p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
+    extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
+    variances_d_a = [compute_variance(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
+    rates_d_a = [compute_rate(i_d_a[k], variances_d_a[k], params_d_a[k].δt; cutoff_time=(1 / 6) * params_d_a[k].δt * i_d_a[k][end]) for k in 1:K_d]
+
+  end
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Variances")
+  ax2 = M.Axis(fig[1, 2], xlabel="k (Watts-Strogatz)", title="Convergence rates", xscale=log10, yscale=identity)
+
+  M.ylims!(ax1, (1e-5, 1))
+  M.xlims!(ax1, (nothing, 10.0))
+
+  for k in 1:K_d
+    r = i_d_a[k] * params_d_a[k].δt
+    # p2p = p2p_d_a[k]
+    M.lines!(ax1, r, variances_d_a[k], label=labels_d[k] * " k = $ws_d_k_a[k]", color=p_to_color(ws_d_k_a[k]; mapping=log10, pmin=1e-3, pmax=1))
+    #M.lines!(ax1, r, p2p, label=labels_d[k] * " rate: $(round(rates_d_a[k]; digits=3))")
+
+    M.lines!(ax2, ws_d_k_a, rates_d_a)
+  end
+
+  for k in 1:K_mfl
+    r = i_mfl_a[k] * params_mfl_a[k].δt
+    M.lines!(ax1, r, f_var_a[k], label=labels_mfl[k] * " k = $ws_mfl_k_a[k]", linestyle=:dot, color=p_to_color(ws_mfl_k_a[k]; mapping=log10, pmin=1e-3, pmax=1))
+    M.lines!(ax2, ws_mfl_k_a, rates_mfl_a, label="MFL")
+    # M.lines!(ax2, er_mfl_p_a, rates_mfl_rescaled_a, label="MFL (rescaled)")
+  end
+
+  #M.axislegend(ax1)
+
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
+  M.save("$prefix/comparison2.png", fig)
+  M.save("$prefix/comparison2.svg", fig)
+  @info "Plot saved at $prefix/comparison2.png"
+
+  try
+    display(fig)
+  catch
+    @error "Cannot display plot window, are you logged in over SSH?"
+  end
+
+end
+
+function compare_variance_ws_all(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String};
+  cutoff_factor::Float64=1.0
+)
+
+  # check that the dirs actually exist
+  @assert all(isdir, meanfield_dirs)
+  @assert all(isdir, micro_dirs)
+
+  K_mfl, K_d = length(meanfield_dirs), length(micro_dirs)
+
+  if K_mfl == 0 && K_d == 0
+    @error "No dir provided"
+    return
+  end
+
+  if K_mfl > 0
+    labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
+    params_mfl_a = map(Params.from_toml, meanfield_dirs)
+    ws_mfl_k_a = map(x -> round(Int64, 999 * x.init_micro_graph_args[2]), params_mfl_a)
+
+    N_a = map(f -> size(f, 1), f_a)
+
+    x_a = map(build_x, N_a)
+
+    # g_M1_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "g_M1_n"), meanfield_dirs)
+    f_var_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f_var"), meanfield_dirs)
+    rates_mfl_a = [compute_rate(i_mfl_a[k], f_var_a[k], params_mfl_a[k].δt; cutoff_time=cutoff_factor * params_mfl_a[k].δt * i_mfl_a[k][end]) for k in 1:K_mfl]
+
+    split_dir_names = split_run_path(meanfield_dirs)
+    prev_prefix = split_dir_names[1][1]
+
+    aggregates_mfl = Dict{Symbol,Any}[]
+    aggregate = Dict{Symbol,Any}()
+    rates_acc = Float64[]
+    var_acc = Vector{Float64}[]
+    prefix_n = 0
+
+    for (i, p) in enumerate(split_dir_names)
+      if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+        aggregate[:rates] = sum(rates_acc) / prefix_n
+        aggregate[:k] = ws_mfl_k_a[i-1]
+        aggregate[:time] = i_mfl_a[i-1] * params_mfl_a[i-1].δt
+        aggregate[:variance] = sum(var_acc) / prefix_n
+        push!(aggregates_mfl, aggregate)
+        aggregate = Dict{Symbol,Any}()
+        empty!(rates_acc)
+        empty!(var_acc)
+        prefix_n = 0
+        prev_prefix = p[1]
+      end
+      push!(rates_acc, rates_mfl_a[i])
+      push!(var_acc, f_var_a[i])
+      prefix_n += 1
+    end
+
+  end
+
+
+  if K_d > 0
+    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
+    params_d_a = map(Params.from_toml, micro_dirs)
+    ws_d_k_a = map(x -> round(Int64, (params_d_a[1].N_micro - 1) * x.init_micro_graph_args[2]), params_d_a)
+
+    adj_matrix_a = map(dn -> load_hdf5_sparse(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
+    #adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+    N_micro_a = map(ω -> size(ω, 1), ω_a)
+
+    function compute_weighted_avg(k)
+      adj_matrix = adj_matrix_a[k]
+      ω = ω_a[k]
+      N_micro = N_micro_a[k]
+
+      if !isnothing(adj_matrix)
+        sharp_I = vec(sum(adj_matrix; dims=2))
+        n_connections = sum(sharp_I)
+
+        return [sum(ω[:, k] .* sharp_I) ./ n_connections for k in axes(ω, 2)]
+      else
+        return [sum(ω[:, k]) / (N_micro - 1) for k in axes(ω, 2)]
+      end
+    end
+
+    function compute_variance(ω, centers)
+      N = size(ω, 1)
+      return vec(sum((ω .- centers') .^ 2; dims=1)) / N
+    end
+
+
+    ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
+    p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
+    extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
+    variances_d_a = [compute_variance(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
+    rates_d_a = [compute_rate(i_d_a[k], variances_d_a[k], params_d_a[k].δt; cutoff_time=cutoff_factor * params_d_a[k].δt * i_d_a[k][end]) for k in 1:K_d]
+
+    split_dir_names = split_run_path(micro_dirs)
+    prev_prefix = split_dir_names[1][1]
+
+    aggregates_d = Dict{Symbol,Any}[]
+    aggregate = Dict{Symbol,Any}()
+    rates_acc = Float64[]
+    var_acc = Vector{Float64}[]
+    prefix_n = 0
+
+    for (i, p) in enumerate(split_dir_names)
+      if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+        aggregate[:rates] = sum(rates_acc) / prefix_n
+        aggregate[:k] = ws_d_k_a[i-1]
+        aggregate[:time] = i_d_a[i-1] * params_d_a[i-1].δt
+        aggregate[:variance] = sum(var_acc) / prefix_n
+        push!(aggregates_d, aggregate)
+        aggregate = Dict{Symbol,Any}()
+        empty!(rates_acc)
+        empty!(var_acc)
+        prefix_n = 0
+        prev_prefix = p[1]
+      end
+      push!(rates_acc, rates_d_a[i])
+      push!(var_acc, variances_d_a[i])
+      prefix_n += 1
+    end
+
+  end
+
+  mfl_k = map(x -> x[:k], aggregates_mfl)
+  mfl_rates = map(x -> x[:rates], aggregates_mfl)
+
+  d_k = map(x -> x[:k], aggregates_d)
+  d_rates = map(x -> x[:rates], aggregates_d)
+
+  fig = M.Figure(size=(1920, 1080))
+  # ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Variances")
+  ax2 = M.Axis(fig[1, 1], xlabel="k (Watts-Strogatz)", title="Convergence rates", xscale=log10, yscale=identity)
+
+  M.lines!(ax2, mfl_k, mfl_rates, label="MFL")
+  M.lines!(ax2, d_k, d_rates, label="Micro")
+
+  #M.axislegend(ax1)
+
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
+  M.save("$prefix/comparison2.png", fig)
+  M.save("$prefix/comparison2.svg", fig)
+  @info "Plot saved at $prefix/comparison2.png"
+
+  try
+    display(fig)
+  catch
+    @error "Cannot display plot window, are you logged in over SSH?"
+  end
+
+end
+
+function compare_variance_ba_all(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String};
+  cutoff_factor::Float64=1.0
+)
+
+  # check that the dirs actually exist
+  @assert all(isdir, meanfield_dirs)
+  @assert all(isdir, micro_dirs)
+
+  K_mfl, K_d = length(meanfield_dirs), length(micro_dirs)
+
+  if K_mfl == 0 && K_d == 0
+    @error "No dir provided"
+    return
+  end
+
+  if K_mfl > 0
+    labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
+    params_mfl_a = map(Params.from_toml, meanfield_dirs)
+    ba_mfl_k_a = map(x -> x.init_micro_graph_args[2], params_mfl_a)
+
+    N_a = map(f -> size(f, 1), f_a)
+
+    f_var_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f_var"), meanfield_dirs)
+    rates_mfl_a = [compute_rate(i_mfl_a[k], f_var_a[k], params_mfl_a[k].δt; cutoff_time=cutoff_factor * params_mfl_a[k].δt * i_mfl_a[k][end]) for k in 1:K_mfl]
+
+    split_dir_names = split_run_path(meanfield_dirs)
+    prev_prefix = split_dir_names[1][1]
+
+    aggregates_mfl = Dict{Symbol,Any}[]
+    aggregate = Dict{Symbol,Any}()
+    rates_acc = Float64[]
+    var_acc = Vector{Float64}[]
+    prefix_n = 0
+
+    for (i, p) in enumerate(split_dir_names)
+      if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+        aggregate[:rates] = sum(rates_acc) / prefix_n
+        aggregate[:k] = ba_mfl_k_a[i-1]
+        aggregate[:time] = i_mfl_a[i-1] * params_mfl_a[i-1].δt
+        aggregate[:variance] = sum(var_acc) / prefix_n
+        push!(aggregates_mfl, aggregate)
+        aggregate = Dict{Symbol,Any}()
+        empty!(rates_acc)
+        empty!(var_acc)
+        prefix_n = 0
+        prev_prefix = p[1]
+      end
+      push!(rates_acc, rates_mfl_a[i])
+      push!(var_acc, f_var_a[i])
+      prefix_n += 1
+    end
+
+  end
+
+
+  if K_d > 0
+    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
+    params_d_a = map(Params.from_toml, micro_dirs)
+    ba_d_k_a = map(x -> x.init_micro_graph_args[2], params_d_a)
+
+    adj_matrix_a = map(dn -> load_hdf5_sparse(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
+    #adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+    N_micro_a = map(ω -> size(ω, 1), ω_a)
+
+    function compute_weighted_avg(k)
+      adj_matrix = adj_matrix_a[k]
+      ω = ω_a[k]
+      N_micro = N_micro_a[k]
+
+      if !isnothing(adj_matrix)
+        sharp_I = vec(sum(adj_matrix; dims=2))
+        n_connections = sum(sharp_I)
+
+        return [sum(ω[:, k] .* sharp_I) ./ n_connections for k in axes(ω, 2)]
+      else
+        return [sum(ω[:, k]) / (N_micro - 1) for k in axes(ω, 2)]
+      end
+    end
+
+    function compute_variance(ω, centers)
+      N = size(ω, 1)
+      return vec(sum((ω .- centers') .^ 2; dims=1)) / N
+    end
+
+
+    ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
+    p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
+    extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
+    variances_d_a = [compute_variance(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
+    rates_d_a = [compute_rate(i_d_a[k], variances_d_a[k], params_d_a[k].δt; cutoff_time=cutoff_factor * params_d_a[k].δt * i_d_a[k][end]) for k in 1:K_d]
+
+    split_dir_names = split_run_path(micro_dirs)
+    prev_prefix = split_dir_names[1][1]
+
+    aggregates_d = Dict{Symbol,Any}[]
+    aggregate = Dict{Symbol,Any}()
+    rates_acc = Float64[]
+    var_acc = Vector{Float64}[]
+    prefix_n = 0
+
+    for (i, p) in enumerate(split_dir_names)
+      if (p[1] != prev_prefix) || (i == lastindex(split_dir_names) && prefix_n > 0)
+        aggregate[:rates] = sum(rates_acc) / prefix_n
+        aggregate[:k] = ba_d_k_a[i-1]
+        aggregate[:time] = i_d_a[i-1] * params_d_a[i-1].δt
+        aggregate[:variance] = sum(var_acc) / prefix_n
+        push!(aggregates_d, aggregate)
+        aggregate = Dict{Symbol,Any}()
+        empty!(rates_acc)
+        empty!(var_acc)
+        prefix_n = 0
+        prev_prefix = p[1]
+      end
+      push!(rates_acc, rates_d_a[i])
+      push!(var_acc, variances_d_a[i])
+      prefix_n += 1
+    end
+
+  end
+
+  mfl_k = map(x -> x[:k], aggregates_mfl)
+  mfl_rates = map(x -> x[:rates], aggregates_mfl)
+
+  d_k = map(x -> x[:k], aggregates_d)
+  d_rates = map(x -> x[:rates], aggregates_d)
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Variances")
+  ax2 = M.Axis(fig[1, 2], xlabel="k (Barabasi-Albert)", title="Convergence rates", xscale=log10, yscale=identity)
+
+  M.vspan!(ax1, 0.0, cutoff_factor * params_mfl_a[1].δt * i_mfl_a[1][end]; color=(:blue, 0.1))
+
+  for (i, a_d) in enumerate(aggregates_d)
+    label = i == 1 ? "Micro" : nothing
+    M.lines!(ax1, a_d[:time], a_d[:variance], label=label, linestyle=:dot,
+      color=p_to_color(a_d[:k]; mapping=log10, pmin=minimum(d_k), pmax=maximum(d_k)))
+  end
+
+  for (i, a_mfl) in enumerate(aggregates_mfl)
+    label = i == 1 ? "MFL" : nothing
+    M.lines!(ax1, a_mfl[:time], a_mfl[:variance], label=label,
+      color=p_to_color(a_mfl[:k]; mapping=log10, pmin=minimum(mfl_k), pmax=maximum(mfl_k)))
+  end
+
+  M.lines!(ax2, d_k, d_rates, label="Micro", linestyle=:dot, color=:blue)
+  M.lines!(ax2, mfl_k, mfl_rates, label="MFL", color=:blue)
+
+  M.axislegend(ax1)
+  M.axislegend(ax2)
+
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
+  M.save("$prefix/comparison2.png", fig)
+  M.save("$prefix/comparison2.svg", fig)
+  @info "Plot saved at $prefix/comparison2.png"
+
+  try
+    display(fig)
+  catch
+    @error "Cannot display plot window, are you logged in over SSH?"
+  end
+
+end
+
+function compare_variance_lfr_all(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String};
+  cutoff_factor::Float64=1.0
+)
+
+  # check that the dirs actually exist
+  @assert all(isdir, meanfield_dirs)
+  @assert all(isdir, micro_dirs)
+
+  K_mfl, K_d = length(meanfield_dirs), length(micro_dirs)
+
+  if K_mfl == 0 && K_d == 0
+    @error "No dir provided"
+    return
+  end
+
+  if K_mfl > 0
+    labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
+    params_mfl_a = map(Params.from_toml, meanfield_dirs)
+    lfr_mfl_μ_a = map(x -> x.init_lfr_kwargs.mixing_parameter, params_mfl_a)
+
+    N_a = map(f -> size(f, 1), f_a)
+
+    f_var_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f_var"), meanfield_dirs)
+    rates_mfl_a = [compute_rate(i_mfl_a[k], f_var_a[k], params_mfl_a[k].δt; cutoff_time=cutoff_factor * params_mfl_a[k].δt * i_mfl_a[k][end]) for k in 1:K_mfl]
+
+    split_dir_names = split_run_path(meanfield_dirs)
+    prev_prefix = split_dir_names[1][1]
+
+    aggregates_mfl = Dict{Symbol,Any}[]
+    aggregate = Dict{Symbol,Any}()
+    rates_acc = Float64[]
+    var_acc = Vector{Float64}[]
+    prefix_n = 0
+
+    for (i, p) in enumerate(split_dir_names)
+      if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+        aggregate[:rates] = sum(rates_acc) / prefix_n
+        aggregate[:μ] = lfr_mfl_μ_a[i-1]
+        aggregate[:time] = i_mfl_a[i-1] * params_mfl_a[i-1].δt
+        aggregate[:variance] = sum(var_acc) / prefix_n
+        push!(aggregates_mfl, aggregate)
+        aggregate = Dict{Symbol,Any}()
+        empty!(rates_acc)
+        empty!(var_acc)
+        prefix_n = 0
+        prev_prefix = p[1]
+      end
+      push!(rates_acc, rates_mfl_a[i])
+      push!(var_acc, f_var_a[i])
+      prefix_n += 1
+    end
+
+  end
+
+
+  if K_d > 0
+    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
+    params_d_a = map(Params.from_toml, micro_dirs)
+    lfr_d_μ_a = map(x -> x.init_lfr_kwargs.mixing_parameter, params_d_a)
+
+    adj_matrix_a = map(dn -> load_hdf5_sparse(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
+    #adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+    N_micro_a = map(ω -> size(ω, 1), ω_a)
+
+    function compute_weighted_avg(k)
+      adj_matrix = adj_matrix_a[k]
+      ω = ω_a[k]
+      N_micro = N_micro_a[k]
+
+      if !isnothing(adj_matrix)
+        sharp_I = vec(sum(adj_matrix; dims=2))
+        n_connections = sum(sharp_I)
+
+        return [sum(ω[:, k] .* sharp_I) ./ n_connections for k in axes(ω, 2)]
+      else
+        return [sum(ω[:, k]) / (N_micro - 1) for k in axes(ω, 2)]
+      end
+    end
+
+    function compute_variance(ω, centers)
+      N = size(ω, 1)
+      return vec(sum((ω .- centers') .^ 2; dims=1)) / N
+    end
+
+    ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
+    p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
+    extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
+    variances_d_a = [compute_variance(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
+    rates_d_a = [compute_rate(i_d_a[k], variances_d_a[k], params_d_a[k].δt; cutoff_time=cutoff_factor * params_d_a[k].δt * i_d_a[k][end]) for k in 1:K_d]
+
+    split_dir_names = split_run_path(micro_dirs)
+    prev_prefix = split_dir_names[1][1]
+
+    aggregates_d = Dict{Symbol,Any}[]
+    aggregate = Dict{Symbol,Any}()
+    rates_acc = Float64[]
+    var_acc = Vector{Float64}[]
+    prefix_n = 0
+
+    for (i, p) in enumerate(split_dir_names)
+      if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+        aggregate[:rates] = sum(rates_acc) / prefix_n
+        aggregate[:μ] = lfr_d_μ_a[i-1]
+        aggregate[:time] = i_d_a[i-1] * params_d_a[i-1].δt
+        aggregate[:variance] = sum(var_acc) / prefix_n
+        push!(aggregates_d, aggregate)
+        aggregate = Dict{Symbol,Any}()
+        empty!(rates_acc)
+        empty!(var_acc)
+        prefix_n = 0
+        prev_prefix = p[1]
+      end
+      push!(rates_acc, rates_d_a[i])
+      push!(var_acc, variances_d_a[i])
+      prefix_n += 1
+    end
+
+  end
+
+  mfl_µ = map(x -> x[:µ], aggregates_mfl)
+  mfl_rates = map(x -> x[:rates], aggregates_mfl)
+
+  d_µ = map(x -> x[:µ], aggregates_d)
+  d_rates = map(x -> x[:rates], aggregates_d)
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Variances")
+  ax2 = M.Axis(fig[1, 2], xlabel="μ (LFR)", title="Convergence rates", xscale=log10, yscale=identity)
+
+  M.vspan!(ax1, 0.0, cutoff_factor * params_mfl_a[1].δt * i_mfl_a[1][end]; color=(:blue, 0.1))
+
+  for (i, a_d) in enumerate(aggregates_d)
+    label = i == 1 ? "Micro" : nothing
+    M.lines!(ax1, a_d[:time], a_d[:variance], label=label, linestyle=:dot,
+      color=p_to_color(a_d[:µ]; mapping=log10, pmin=minimum(d_µ), pmax=maximum(d_µ)))
+  end
+
+  for (i, a_mfl) in enumerate(aggregates_mfl)
+    label = i == 1 ? "MFL" : nothing
+    M.lines!(ax1, a_mfl[:time], a_mfl[:variance], label=label,
+      color=p_to_color(a_mfl[:µ]; mapping=log10, pmin=minimum(mfl_µ), pmax=maximum(mfl_µ)))
+  end
+
+  M.lines!(ax2, d_µ, d_rates, label="Micro", linestyle=:dot, color=:blue)
+  M.lines!(ax2, mfl_µ, mfl_rates, label="MFL", color=:blue)
+
+  M.axislegend(ax1)
+  M.axislegend(ax2)
+
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
+  M.save("$prefix/comparison2.png", fig)
+  M.save("$prefix/comparison2.svg", fig)
+  @info "Plot saved at $prefix/comparison2.svg"
+
+  try
+    display(fig)
+  catch
+    @error "Cannot display plot window, are you logged in over SSH?"
+  end
+
+end
+
+function compare_variance_ensemble_average(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String},
+  parameter_name::String,
+  parameter_extractor::Function
+  ;
+  cutoff_factor::Float64=1.0,
+)
+
+  # check that the dirs actually exist
+  @assert all(isdir, meanfield_dirs)
+  @assert all(isdir, micro_dirs)
+
+  K_mfl, K_d = length(meanfield_dirs), length(micro_dirs)
+
+  if K_mfl == 0 && K_d == 0
+    @error "No dir provided"
+    return
+  end
+
+  if K_mfl > 0
+    labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
+    params_mfl_a = map(Params.from_toml, meanfield_dirs)
+    indep_param_mfl_a = map(parameter_extractor, params_mfl_a)
+
+    N_a = map(f -> size(f, 1), f_a)
+
+    f_stddev_a = map(dn -> sqrt.(load_hdf5_data(joinpath(dn, "data.hdf5"), "f_var")), meanfield_dirs)
+    rates_mfl_a = [compute_rate(i_mfl_a[k], f_stddev_a[k], params_mfl_a[k].δt; cutoff_time=cutoff_factor * params_mfl_a[k].δt * i_mfl_a[k][end]) for k in 1:K_mfl]
+
+    split_dir_names = split_run_path(meanfield_dirs)
+    prev_prefix = split_dir_names[1][1]
+
+    aggregates_mfl = Dict{Symbol,Any}[]
+    aggregate = Dict{Symbol,Any}()
+    rates_acc = Float64[]
+    stddev_acc = Vector{Float64}[]
+    prefix_n = 0
+
+    for (i, p) in enumerate(split_dir_names)
+      if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+        aggregate[:rates] = sum(rates_acc) / prefix_n
+        aggregate[:param] = indep_param_mfl_a[i-1]
+        aggregate[:time] = i_mfl_a[i-1] * params_mfl_a[i-1].δt
+        aggregate[:stddev] = sum(stddev_acc) / prefix_n
+        push!(aggregates_mfl, aggregate)
+        aggregate = Dict{Symbol,Any}()
+        empty!(rates_acc)
+        empty!(stddev_acc)
+        prefix_n = 0
+        prev_prefix = p[1]
+      end
+      push!(rates_acc, rates_mfl_a[i])
+      push!(stddev_acc, f_stddev_a[i])
+      prefix_n += 1
+    end
+
+  end
+
+
+  if K_d > 0
+    labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
+    i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+    ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
+    params_d_a = map(Params.from_toml, micro_dirs)
+    indep_param_d_a = map(parameter_extractor, params_d_a)
+
+    adj_matrix_a = map(dn -> load_hdf5_sparse(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
+    #adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+    N_micro_a = map(ω -> size(ω, 1), ω_a)
+
+    function compute_weighted_avg(k)
+      adj_matrix = adj_matrix_a[k]
+      ω = ω_a[k]
+      N_micro = N_micro_a[k]
+
+      if !isnothing(adj_matrix)
+        sharp_I = vec(sum(adj_matrix; dims=2))
+        n_connections = sum(sharp_I)
+
+        return [sum(ω[:, k] .* sharp_I) ./ n_connections for k in axes(ω, 2)]
+      else
+        return [sum(ω[:, k]) / (N_micro - 1) for k in axes(ω, 2)]
+      end
+    end
+
+    ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
+    p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
+    extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
+    stddevs_d_a = [compute_stddev(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
+    rates_d_a = [compute_rate(i_d_a[k], stddevs_d_a[k], params_d_a[k].δt; cutoff_time=cutoff_factor * params_d_a[k].δt * i_d_a[k][end]) for k in 1:K_d]
+
+    split_dir_names = split_run_path(micro_dirs)
+    prev_prefix = split_dir_names[1][1]
+
+    aggregates_d = Dict{Symbol,Any}[]
+    aggregate = Dict{Symbol,Any}()
+    rates_acc = Float64[]
+    stddev_acc = Vector{Float64}[]
+    prefix_n = 0
+
+    for (i, p) in enumerate(split_dir_names)
+      if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+        aggregate[:rates] = sum(rates_acc) / prefix_n
+        aggregate[:param] = indep_param_d_a[i-1]
+        aggregate[:time] = i_d_a[i-1] * params_d_a[i-1].δt
+        aggregate[:stddev] = sum(stddev_acc) / prefix_n
+        push!(aggregates_d, aggregate)
+        aggregate = Dict{Symbol,Any}()
+        empty!(rates_acc)
+        empty!(stddev_acc)
+        prefix_n = 0
+        prev_prefix = p[1]
+      end
+      push!(rates_acc, rates_d_a[i])
+      push!(stddev_acc, stddevs_d_a[i])
+      prefix_n += 1
+    end
+
+  end
+
+  mfl_param = map(x -> x[:param], aggregates_mfl)
+  mfl_rates = map(x -> x[:rates], aggregates_mfl)
+
+  d_param = map(x -> x[:param], aggregates_d)
+  d_rates = map(x -> x[:rates], aggregates_d)
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Standard deviations")
+  ax2 = M.Axis(fig[1, 2], xlabel="$(parameter_name)", title="Convergence rates", xscale=log10, yscale=M.Makie.pseudolog10)
+
+  M.vspan!(ax1, 0.0, cutoff_factor * params_mfl_a[1].δt * i_mfl_a[1][end]; color=(:blue, 0.1))
+
+  for (i, a_d) in enumerate(aggregates_d)
+    label = i == 1 ? "Micro" : nothing
+    M.lines!(ax1, a_d[:time], a_d[:stddev], label=label, linestyle=:dot,
+      color=p_to_color(a_d[:param]; mapping=log10, pmin=minimum(d_param), pmax=maximum(d_param)))
+  end
+
+  for (i, a_mfl) in enumerate(aggregates_mfl)
+    label = i == 1 ? "MFL" : nothing
+    M.lines!(ax1, a_mfl[:time], a_mfl[:stddev], label=label,
+      color=p_to_color(a_mfl[:param]; mapping=log10, pmin=minimum(mfl_param), pmax=maximum(mfl_param)))
+  end
+
+  M.lines!(ax2, d_param, d_rates, label="Micro", linestyle=:dot, color=:blue)
+  M.lines!(ax2, mfl_param, mfl_rates, label="MFL", color=:blue)
+
+  M.axislegend(ax1)
+  M.axislegend(ax2)
+
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
+  M.save("$prefix/comparison.png", fig)
+  M.save("$prefix/comparison.svg", fig)
+  @info "Plot saved at $prefix/comparison.svg"
+
+  try
+    display(fig)
+  catch
+    @error "Cannot display plot window, are you logged in over SSH?"
+  end
+
+end
+
+function compare_variance_er_EA(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String};
+  cutoff_factor::Float64=1.0
+)
+  compare_variance_ensemble_average(
+    meanfield_dirs,
+    micro_dirs,
+    "p (Erdos-Renyi)",
+    x -> x.init_micro_graph_args[2];
+    cutoff_factor=cutoff_factor
+  )
+end
+
+function compare_variance_ws_EA(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String};
+  cutoff_factor::Float64=1.0
+)
+  compare_variance_ensemble_average(
+    meanfield_dirs,
+    micro_dirs,
+    "k (Watts-Strogatz)",
+    x -> round(Int64, 999 * x.init_micro_graph_args[2]);
+    cutoff_factor=cutoff_factor
+  )
+end
+
+function compare_variance_ba_EA(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String};
+  cutoff_factor::Float64=1.0
+)
+  compare_variance_ensemble_average(
+    meanfield_dirs,
+    micro_dirs,
+    "k (Barabasi-Albert)",
+    x -> x.init_micro_graph_args[2];
+    cutoff_factor=cutoff_factor
+  )
+end
+
+function compare_variance_lfr_EA(
+  meanfield_dirs::Vector{String},
+  micro_dirs::Vector{String};
+  cutoff_factor::Float64=1.0
+)
+  compare_variance_ensemble_average(
+    meanfield_dirs,
+    micro_dirs,
+    "µ (LFR)",
+    x -> x.init_lfr_kwargs.mixing_parameter;
+    cutoff_factor=cutoff_factor
+  )
 end

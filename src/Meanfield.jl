@@ -449,7 +449,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   store_i = [i]
   store_f = [copy(f)]
   if !params.constant_g
-    store_g = [(0, copy(g))]
+    if params.store_g
+      store_g = [(0, copy(g))]
+    end
     f_stats = compute_f_stats(f, g, x)
     store_g_M1_n = [f_stats.g_M1_n]
     store_f_var = [f_stats.f_var]
@@ -483,6 +485,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     @warn "LF_relaxation != 1 ($(params.LF_relaxation))"
   end
 
+  mfl_λ = params.mfl_connectivity_factor
 
   while i < params.max_iter
 
@@ -515,15 +518,16 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       # #################################
 
       if params.flux == :KT
+        # FIXME: connectivity factor missing
         f .= df
       else
-        f .-= params.δt / params.δx * df
+        f .-= params.δt / params.δx * mfl_λ * df
         if !params.constant_g
           if params.f_dependent_g
             # DEFINITION G
             g .= (f .* α .* f') ./ params.connection_density
           else
-            g .-= params.δt / params.δx * dg
+            g .-= params.δt / params.δx * mfl_λ * dg
           end
         end
       end
@@ -546,9 +550,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
         compute_dg!(view(RK4_dg, :, stage), params, g, a, a_prime)
       end
 
-      RK4_f[:, stage] .= f .- 0.5 .* params.δt ./ params.δx .* RK4_df[:, stage]
+      RK4_f[:, stage] .= f .- 0.5 .* mfl_λ * params.δt ./ params.δx .* RK4_df[:, stage]
       if !params.constant_g
-        RK4_g[:, :, stage] .= g .- 0.5 .* params.δt ./ params.δx .* RK4_dg[:, :, stage]
+        RK4_g[:, :, stage] .= g .- 0.5 .* mfl_λ * params.δt ./ params.δx .* RK4_dg[:, :, stage]
       end
 
       # Stage 2
@@ -563,9 +567,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
         compute_dg!(view(RK4_dg, :, stage), params, RK4_g[:, :, stage-1], a, a_prime)
       end
 
-      RK4_f[:, stage] .= f .- 0.5 .* params.δt ./ params.δx .* RK4_df[:, stage]
+      RK4_f[:, stage] .= f .- 0.5 .* mfl_λ * params.δt ./ params.δx .* RK4_df[:, stage]
       if !params.constant_g
-        RK4_g[:, :, stage] .= g .- 0.5 .* params.δt ./ params.δx .* RK4_dg[:, :, stage]
+        RK4_g[:, :, stage] .= g .- 0.5 .* mfl_λ * params.δt ./ params.δx .* RK4_dg[:, :, stage]
       end
 
       # Stage 3
@@ -580,9 +584,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
         compute_dg!(view(RK4_dg, :, stage), params, RK4_g[:, :, stage-1], a, a_prime)
       end
 
-      RK4_f[:, stage] .= f .- params.δt ./ params.δx .* RK4_df[:, stage]
+      RK4_f[:, stage] .= f .- mfl_λ * params.δt ./ params.δx .* RK4_df[:, stage]
       if !params.constant_g
-        RK4_g[:, :, stage] .= g .- params.δt ./ params.δx .* RK4_dg[:, :, stage]
+        RK4_g[:, :, stage] .= g .- mfl_λ * params.δt ./ params.δx .* RK4_dg[:, :, stage]
       end
 
       # Stage 4
@@ -602,9 +606,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
         dg .= (RK4_dg[:, :, 1] .+ 2RK4_dg[:, :, 2] + 2RK4_dg[:, :, 3] + RK4_dg[:, :, 4]) ./ 6
       end
 
-      f -= params.δt / params.δx * df
+      f -= mfl_λ * params.δt / params.δx * df
       if !params.constant_g
-        g -= params.δt / params.δx * dg
+        g -= mfl_λ * params.δt / params.δx * dg
       end
     else
       throw("Unkown time-stepping method '$(params.time_stepping)'")
@@ -617,10 +621,12 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
         f_stats = compute_f_stats(f, g, x)
         push!(store_g_M1_n, f_stats.g_M1_n)
         push!(store_f_var, f_stats.f_var)
-        push!(store_g, (i, copy(g)))
-        if length(store_g) > 100
-          store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["g/$i" => g for (i, g) in store_g])
-          empty!(store_g)
+        if params.store_g
+          push!(store_g, (i, copy(g)))
+          if length(store_g) > 100
+            store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["g/$i" => g for (i, g) in store_g])
+            empty!(store_g)
+          end
         end
       end
     end
@@ -632,10 +638,14 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   )
   if !params.constant_g
     append!(store_pairs,
-      ["g/$i" => g for (i, g) in store_g],
       ["f_var" => store_f_var],
       ["g_M1_n" => store_g_M1_n]
     )
+    if params.store_g
+      append!(store_pairs,
+        ["g/$i" => g for (i, g) in store_g]
+      )
+    end
   end
 
   store_hdf5_data(joinpath(store_dir, "data.hdf5"), store_pairs)

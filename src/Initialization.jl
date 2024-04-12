@@ -53,15 +53,17 @@ function to_adj_matrix(g::Graphs.SimpleGraphs.SimpleGraph)
 end
 
 function compute_kde(x, ops::Vector{Float64})
-  kde_ops = KernelDensity.kde(ops, boundary=(-1, 1))
+  h_SJ = KernelDensitySJ.bwsj(ops)
+  kde_ops = KernelDensity.kde(ops, boundary=(-1, 1), bandwidth=h_SJ)
   interp_kde_ops = KernelDensity.InterpKDE(kde_ops)
   return KernelDensity.pdf(interp_kde_ops, x)
 end
 
 function compute_kde(x, adj_matrix::SpA.SparseMatrixCSC, ops::Vector{Float64})
+  h_SJ = KernelDensitySJ.bwsj(ops)
   ωx, ωy = get_ωx_ωy(adj_matrix, ops)
 
-  kde_a = KernelDensity.kde((ωx, ωy), boundary=((-1, 1), (-1, 1)))
+  kde_a = KernelDensity.kde([ωx ωy], boundary=((-1, 1), (-1, 1)), bandwidth=(h_SJ, h_SJ))
   interp_kde_a = KernelDensity.InterpKDE(kde_a)
 
   return [KernelDensity.pdf(interp_kde_a, _x, _y) for _x in x, _y in x]
@@ -173,9 +175,6 @@ function fast_sampling(f::Function, n::Int64, N_sampling::Int64)
       continue
     end
   end
-
-  p = UnicodePlots.histogram(samples, title="Histogram for ω0", nbins=50, vertical=true)
-  @info p
 
   return sort(samples)
 end
@@ -349,7 +348,6 @@ end
 # filter for NamedTuples only from v1.11
 filter_nt_fields = if VERSION < v"1.11"
   (f, nt) -> begin
-    println(nt)
     NamedTuple{filter(f, keys(nt))}(nt)
   end
 else
@@ -365,7 +363,9 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
   scale_to_01 = x -> 0.5 * (x + 1)
   scale_from_01 = x -> 2x - 1
 
-  GEN_KEYS = [:is_directed, :seed, :tau, :tau2, :nmin, :overlapping_nodes, :overlap_membership]
+  GEN_KEYS = [:is_directed, :nmin, :nmax, :tau, :tau2, :fixed_range, :mixing_parameter,
+    :overlapping_nodes, :overlap_membership, :excess, :defect, :seed, :clustering_coeff]
+
   lfr_gen_kwargs = filter_nt_fields(in(GEN_KEYS), lfr_kwargs_nt)
 
   g, c_ids = LFR.lancichinetti_fortunato_radicchi(params.N_micro, lfr_args...; lfr_gen_kwargs...)
@@ -375,6 +375,7 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
   c_ids_sorted = c_ids[idc_sort]
 
   n_communities = length(unique(c_ids_sorted))
+  @info "[LFR] generated graph with $(n_communities) communities"
   #
   # rescale bounds to [0, 1]
   bounds = collect(lfr_kwargs_nt.µ_community_bounds)
@@ -383,7 +384,7 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
   if lfr_kwargs_nt.µ_community_distrib == :equidistributed
     community_means = collect(range(bounds_01..., length=n_communities))[Random.randperm(n_communities)]
   elseif lfr_kwargs_nt.μ_community_distrib == :uniform
-    community_means = rand(n_communities) * (bounds[2] - bounds[1]) + bounds[1]
+    community_means = rand(n_communities) * (bounds_01[2] - bounds_01[1]) .+ bounds_01[1]
   else
     @error "unkown value '$(lfr_kwargs_nt.μ_community_distrib)' for parameter µ_community_distrib"
   end
@@ -444,11 +445,33 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       scaled_funcs = scale_f_α(params)
       adj_matrix = sample_g_init(params, scaled_funcs, ω_0)
     elseif params.init_method_adj_matrix == :from_graph
-      graph = getfield(Graphs.SimpleGraphs, params.init_micro_graph_type)(params.init_micro_graph_args...; params.init_micro_graph_kwargs...)
+      tries = 0
+      graph = Graphs.Graph()
+      while tries < params.init_micro_graph_max_tries
+        tries += 1
+        graph = getfield(Graphs.SimpleGraphs, params.init_micro_graph_type)(params.init_micro_graph_args...; params.init_micro_graph_kwargs...)
+        if Graphs.is_connected(graph)
+          break
+        end
+      end
+      if tries == params.init_micro_graph_max_tries
+        throw("Could not generate a connected graph after $(tries) tries")
+      end
       adj_matrix = SpA.sparse(graph)
       @assert !isnothing(adj_matrix)
     elseif params.init_method_adj_matrix == :from_lfr
-      adj_matrix, ω_0, c_ids = initialize_LFR(params, params.init_lfr_args...; params.init_lfr_kwargs...)
+      tries = 0
+      adj_matrix, ω_0, c_ids = nothing, nothing, nothing
+      while tries < params.init_lfr_max_tries
+        tries += 1
+        adj_matrix, ω_0, c_ids = initialize_LFR(params, params.init_lfr_args...; params.init_lfr_kwargs...)
+        if params.init_lfr_target_n_communities > 0 && (length(unique(c_ids)) == params.init_lfr_target_n_communities)
+          break
+        end
+      end
+      if isnothing(adj_matrix)
+        throw(ErrorException("Could not generate a LFR graph with $(params.init_lfr_target_n_communities) communities with the given parameters"))
+      end
     else
       throw("Unknown value $(params.init_method_adj_matrix) for parameter init_method_adj_matrix")
     end
@@ -462,7 +485,7 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
     ##################
 
     # Switch to CairoMakie
-    CairoMakie.activate!()
+    # CairoMakie.activate!()
 
     # Define the colormap
     cmap(x) = x < 0 ? CairoMakie.Makie.RGB{Float64}(1.0, 1 + x, 1 + x) : CairoMakie.Makie.RGB{Float64}(1 - x, 1 - x, 1.0)
@@ -491,8 +514,8 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
     end
 
     if params.init_method_adj_matrix == :from_lfr
-      fig = CairoMakie.Figure(size=(2048, 1152))
-      c = CairoMakie.Makie.ColorSchemes.Paired_12.colors
+      fig = M.Figure(size=(2048, 1152))
+      c = M.Makie.ColorSchemes.Paired_12.colors
 
       n_colors = length(c)
 
@@ -500,29 +523,34 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
 
       n_communities = length(unique(c_ids))
 
-      ax1 = CairoMakie.Axis(fig[1, 1], title="LFR graph (colored by community)", xticklabelsvisible=false, yticklabelsvisible=false)
+      ax1 = M.Axis(fig[1, 1], title="LFR graph (colored by community)", xticklabelsvisible=false, yticklabelsvisible=false)
       GraphMakie.graphplot!(ax1, graph; edge_width=0.1, node_color=cs, node_size=12)
 
-      ax2 = CairoMakie.Axis(fig[1, 3], title="LFR graph (colored by opinion)", xticklabelsvisible=false, yticklabelsvisible=false)
-      g_ops = GraphMakie.graphplot!(ax2, graph; edge_width=0.1, node_color=ω_0, node_size=12)
-      fig[2, 3] = cb = CairoMakie.Colorbar(fig, g_ops, label="Opinions", vertical=false)
+      ax2 = M.Axis(fig[1, 3], title="LFR graph (colored by opinion)", xticklabelsvisible=false, yticklabelsvisible=false)
+      g_ops = GraphMakie.graphplot!(ax2, graph; edge_width=0.1, node_color=ω_0, node_size=12,
+        node_attr=(colorrange=(-1, 1),))
+      fig[2, 3] = cb = M.Colorbar(fig, g_ops, label="Opinions", vertical=false)
 
-      ax3 = CairoMakie.Axis(fig[1, 2], title="Opinions histograms (aggregated by community)", xticklabelsvisible=true, yticklabelsvisible=false, xlabel=CairoMakie.L"\omega_i")
+      ax3 = M.Axis(fig[1, 2], title="Opinions histograms (aggregated by community)", xticklabelsvisible=true, yticklabelsvisible=false, xlabel=M.L"\omega_i")
       idc_sort = sortperm(c_ids)
       c_ids_sorted = c_ids[idc_sort]
       ω_0_sorted = ω_0[idc_sort]
       for i in 1:n_communities
         idc = searchsorted(c_ids_sorted, i)
 
-        CairoMakie.hist!(ax3, ω_0_sorted[idc], scale_to=1.0, offset=i, direction=:y, bins=range(-1, 1, 200), color=c[1+(i%n_communities)])
+        M.hist!(ax3, ω_0_sorted[idc], scale_to=1.0, offset=i, direction=:y, bins=range(-1, 1, 200), color=c[1+(i%n_colors)])
       end
 
       lfr_plot_fn = joinpath(store_dir, "graph_LFR.svg")
-      CairoMakie.save(lfr_plot_fn, fig)
+      M.save(lfr_plot_fn, fig)
       @info "LFR Graph view saved at $(lfr_plot_fn)"
+
+      open(joinpath(store_dir, "c_ids.csv"), "w") do c_ids_csv
+        writedlm(c_ids_csv, c_ids)
+      end
     end
 
-    GLMakie.activate!()
+    #GLMakie.activate!()
   end
   if mode == :mfl
     x = build_x(params.N_mfl)
@@ -534,7 +562,7 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       @assert size(f_0) == (params.N_mfl, 1)
     elseif params.init_method_f == :from_f_init
       # Evaluate and scale f_init
-      f_0 = params.f_init_func_unscaled.(x)
+      f_0 = params.f_init_func.(x)
       f_0_integral = δx * sum(f_0)
       f_0 ./= f_0_integral
     elseif params.init_method_f == :from_kde_omega
@@ -551,10 +579,12 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       α = nothing
     elseif params.init_method_g == :from_α_init
       # Evaluate and scale f_init * α_init * f_init' / connection_density
-      α = [params.α_init_func_unscaled(x[i], x[j]) for i in eachindex(x), j in eachindex(x)]
+      α = [params.α_init_func(x[i], x[j]) for i in eachindex(x), j in eachindex(x)]
       g_0 = f_0 .* α .* f_0' / params.connection_density
       g_0_integral = δx^2 * sum(g_0)
       g_0 ./= g_0_integral
+    elseif params.init_method_g == :from_g_init
+      g_0 = [params.g_init_func(x[i], x[j]) for i in eachindex(x), j in eachindex(x)]
     elseif params.init_method_g == :from_kde_adj_matrix
       @assert !isnothing(adj_matrix) "The adjacency matrix is Nothing. I don't know how to perform a KDE if full_adj_matrix is set."
       # Compute KDE
@@ -564,8 +594,8 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       throw("Unknown value $(params.init_method_g) for parameter init_method_g")
     end
     success = store_hdf5_data(joinpath(store_dir, "data.hdf5"), [
-      "f_init" => f_0, "g_init" => g_0, "alpha" => α]
-    )
+      "f_init" => f_0, "g_init" => g_0, "alpha" => α,
+    ])
     if !success
       @warn "Failed to store MFL initial data correctly!"
     end

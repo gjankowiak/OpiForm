@@ -17,6 +17,21 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+"""
+    find_free_suffix(prefix::String; suffix_length::Int64=3)
+
+Return an inexisting filename of the form `prefix`_`suffix`, where `suffix` represents an integer, left padded with zero to a length of `suffix_length`.
+"""
+function find_free_suffix(prefix::String; suffix_length::Int64=3)
+  for k in 0:(10^suffix_length-1)
+    fn = string(prefix, "_", lpad(k, suffix_length, '0'))
+    if !isfile(fn)
+      return fn
+    end
+  end
+  throw("Could not find a free suffix of length $suffix_length for prefix $prefix")
+end
+
 function symmetry_defect(A::Matrix{T}) where {T<:Real}
   if size(A, 1) != size(A, 2)
     return Inf
@@ -141,6 +156,7 @@ function load_hdf5_data(filename::String, key::String)
     return r
   catch
     close(h5)
+    @warn "Failed to load value for key '$key' from file $filename"
     return nothing
   end
 end
@@ -238,4 +254,44 @@ end
 
 function deserialize_params(store_dir::String)
   return Serialization.deserialize(joinpath(store_dir, "params.dat"))
+end
+
+function longest_prefix(str_a::Array{String}; existing_dir::Bool=false)
+  n = length(str_a)
+
+  if n == 0
+    return ""
+  elseif n == 1
+    return str_a[1]
+  end
+
+  # sort the array
+  sorted_str_a = sort(str_a)
+
+  # find the longest common prefix between the first and last element
+  prefix = ""
+  i = 1
+  first_str = sorted_str_a[1]
+  last_str = sorted_str_a[end]
+  for i in eachindex(first_str)
+    if !(i in eachindex(last_str))
+      break
+    end
+    if first_str[i] == last_str[i]
+      prefix *= first_str[i]
+      i += 1
+    else
+      break
+    end
+  end
+  if existing_dir
+    if !isdir(prefix)
+      prefix = splitdir(prefix)[1]
+    end
+  end
+  return prefix
+end
+
+function split_run_path(fns::Vector{String})
+  return map(x -> (y = split(x, "-"); (join(y[1:end-1], "-"), last(y))), fns)
 end

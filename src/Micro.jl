@@ -92,7 +92,7 @@ function delta_EC_potential!(inc::Matrix{Float64}, params::NamedTuple, ω::Vecto
   inc[:, 2] = vec(sum(ω_diff; dims=2)) / (params.N_micro - 1)
 end
 
-function compute_t_star(tmp::Matrix{Float64}, params::NamedTuple, adj_matrix, neighbors::Vector{Int64})
+function compute_T_star(tmp::Matrix{Float64}, params::NamedTuple, adj_matrix, neighbors::Vector{Int64})
   β = 1 - params.δt
 
   # build the transition matrix B, such that ω(t+1) = B*ω(t)
@@ -110,7 +110,7 @@ function compute_t_star(tmp::Matrix{Float64}, params::NamedTuple, adj_matrix, ne
 
   # the number of iterations to consensus should be proportional to -1 / log(λ₂)
   # this correspond to a time to consensus of -1 / log(λ₂) · δt
-  return -1 / log(λ₂) * params.δt
+  return -1 / log(abs(λ₂)) * params.δt
 end
 
 function delta_EB!(inc::Matrix{Float64}, tmp::Matrix{Float64}, params::NamedTuple, ω::Vector{Float64}, ω_diff::Matrix{Float64}, adj_matrix, neighbors::Vector{Int64})
@@ -146,13 +146,9 @@ function affinity!(M, x; diag_factor=1e-1)
   return M
 end
 
-function launch(store_dir::String, params::NamedTuple; force::Bool=false)
-
-  @info "Launching micro"
+function launch(store_dir::String, params::NamedTuple; force::Bool=false, init_only::Bool=false)
 
   prepare_directory(store_dir, params, :micro; force=force)
-
-  @info "Directory ready"
 
   ω = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "omega_init")
   adj_matrix = load_hdf5_sparse(joinpath(store_dir, "data.hdf5"), "adj_matrix")
@@ -173,8 +169,12 @@ function launch(store_dir::String, params::NamedTuple; force::Bool=false)
 
   @assert all(>(0), neighbors) "The network has isolated agents!"
 
-  T_star = compute_t_star(tmp, params, adj_matrix, neighbors)
+  T_star = compute_T_star(tmp, params, adj_matrix, neighbors)
   @show T_star
+
+  if init_only
+    return
+  end
 
   # increment
   # 1st column: EB                   | (Debate)

@@ -19,6 +19,8 @@
 
 module OpiForm
 
+export find_free_suffix
+
 import UnicodePlots
 
 import Logging
@@ -43,16 +45,27 @@ import LinearAlgebra as LA
 
 import Serialization
 
+import DelimitedFiles: writedlm
+
 import LFRBenchmarkGraphs as LFR
 import Random
 import Distributions
+# 
+# global M
+# 
+# try
+#   import GLMakie as M
+# catch
+#   import CairoMakie as M
+# end
+
+import CairoMakie as M
+import CairoMakie
 
 import KernelDensity
+import KernelDensitySJ
 import Graphs
 import GraphMakie
-
-import GLMakie
-import CairoMakie
 
 import HDF5
 
@@ -61,10 +74,8 @@ macro fmt(v)
   return :(string($r, " = ", $(esc(v))))
 end
 
-GLMakie.activate!()
-M = GLMakie
-
 function set_makie_backend(backend)
+  return
   global M
   if backend == :gl
     GLMakie.activate!()

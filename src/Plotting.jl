@@ -27,12 +27,65 @@ end
 
 function compute_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
   idc = searchsortedfirst(i_a * δt, cutoff_time)
-  return log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
+  return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
 end
 
 function compute_stddev(ω, centers)
   N = size(ω, 1)
   return sqrt.(vec(sum((ω .- centers') .^ 2; dims=1)) / N)
+end
+
+function plot_f(meanfield_dir::String; kwargs...)
+  i_mfl = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "i")
+  f = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "f")
+
+  obs_i = M.Observable(1)
+  obs_iter = M.Observable(0)
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1])
+  ax1.title = "f"
+
+  N = size(f, 1)
+  x = build_x(N)
+
+  obs_f = M.@lift f[:, $obs_i]
+  M.lines!(ax1, x, obs_f)
+
+  stride = get(kwargs, :stride, 1)
+  first_idx = get(kwargs, :first_idx, 1)
+  last_idx = get(kwargs, :last_idx, lastindex(i_mfl))
+  i_range = enumerate([first_idx:stride:last_idx; last_idx])
+
+  function step_i(ii_i_tuple)
+
+    ii, i = ii_i_tuple
+
+    iter = i_mfl[i]
+
+    pct = lpad(Int(round(100 * ii / length(i_range))), 3, " ")
+    print("  Creating movie: $pct%" * "\b"^50 * ", current iteration: $iter")
+
+    if any(isnan, f[:, i])
+      @error "Got NaN in f"
+      return
+    end
+
+    obs_i[] = i
+    obs_iter[] = iter
+
+    first_mass = 2 / N * sum(f[:, i])
+    ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
+    ax1.title = string(iter)
+  end
+
+  effective_output_filename = joinpath(meanfield_dir, "movie.mp4")
+
+  M.record(step_i, fig, effective_output_filename, i_range)
+  @info ("movie saved at $effective_output_filename")
+
+  println()
+
 end
 
 function plot_result(; output_filename::String="", meanfield_dir::Union{String,Nothing}=nothing, micro_dir::Union{String,Nothing}=nothing, kwargs...)
@@ -654,6 +707,18 @@ function compare_variance_ensemble_average(
     return
   end
 
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
+
+  aggregates_path = joinpath(prefix, "aggregates.toml")
+  aggregates = nothing
+  if isfile(aggregates_path)
+    aggregates = TOML.parsefile(aggregates_path)["data"]
+  end
+
+  aggregates = sort(aggregates, by=x -> x["param"])
+
+
   if K_mfl > 0
     labels_mfl = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
     i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
@@ -763,9 +828,19 @@ function compare_variance_ensemble_average(
   d_param = map(x -> x[:param], aggregates_d)
   d_rates = map(x -> x[:rates], aggregates_d)
 
+  mean = (v) -> sum(v) / length(v)
+
+  t_stars = [mean(a["t_star"]) for a in aggregates]
+  clustering = [mean(a["clustering"]) for a in aggregates]
+
   fig = M.Figure(size=(1920, 1080))
   ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Standard deviations")
   ax2 = M.Axis(fig[1, 2], xlabel="$(parameter_name)", title="Convergence rates", xscale=log10, yscale=M.Makie.pseudolog10)
+  ax3 = M.Axis(fig[1, 3], xlabel="T*", ylabel="Convergence rate", xscale=log10)
+  ax4 = M.Axis(fig[1, 4], xlabel="Clustering coeff.", xscale=identity)
+
+  M.linkyaxes!(ax2, ax3)
+  M.linkyaxes!(ax2, ax4)
 
   M.vspan!(ax1, 0.0, cutoff_factor * params_mfl_a[1].δt * i_mfl_a[1][end]; color=(:blue, 0.1))
 
@@ -784,11 +859,17 @@ function compare_variance_ensemble_average(
   M.lines!(ax2, d_param, d_rates, label="Micro", linestyle=:dot, color=:blue)
   M.lines!(ax2, mfl_param, mfl_rates, label="MFL", color=:blue)
 
+  M.lines!(ax3, t_stars, d_rates, label="Micro", linestyle=:dot, color=:blue)
+  M.lines!(ax3, t_stars, mfl_rates, label="MFL", color=:blue)
+
+  M.lines!(ax4, clustering, d_rates, label="Micro", linestyle=:dot, color=:blue)
+  M.lines!(ax4, clustering, mfl_rates, label="MFL", color=:blue)
+
   M.axislegend(ax1)
   M.axislegend(ax2)
+  M.axislegend(ax3)
+  M.axislegend(ax4)
 
-  dirs = vcat(meanfield_dirs, micro_dirs)
-  prefix = longest_prefix(dirs, existing_dir=true)
   M.save("$prefix/comparison.png", fig)
   M.save("$prefix/comparison.svg", fig)
   @info "Plot saved at:"

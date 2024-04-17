@@ -26,9 +26,9 @@ function main()
     end
   end
 
-  a = 1
+  mfl_dirs = mfl_dirs[1:end-2*5]
+  micro_dirs = micro_dirs[1:end-2*5]
 
-  OpiForm.compare_variance_ba_all(mfl_dirs, micro_dirs; cutoff_factor=0.4)
   OpiForm.compare_variance_ba_EA(mfl_dirs, micro_dirs; cutoff_factor=0.4)
 
 end

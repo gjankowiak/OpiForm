@@ -92,6 +92,24 @@ function delta_EC_potential!(inc::Matrix{Float64}, params::NamedTuple, ω::Vecto
   inc[:, 2] = vec(sum(ω_diff; dims=2)) / (params.N_micro - 1)
 end
 
+function compute_T_star(δt::Float64, adj_matrix)
+  β = 1 - δt
+  neighbors = Vector{Int64}(vec(sum(adj_matrix; dims=2)))
+
+  # build the transition matrix B, such that ω(t+1) = B*ω(t)
+  tmp = (1 - β) * adj_matrix ./ neighbors
+  diag = view(tmp, LA.diagind(tmp))
+  diag .= β
+
+  # compute the 2 largest eigenvalue
+  evs = AM.partialschur(tmp, nev=6)[1].eigenvalues
+  λ₂ = evs[2]
+
+  # the number of iterations to consensus should be proportional to -1 / log(λ₂)
+  # this correspond to a time to consensus of -1 / log(λ₂) · δt
+  return -1 / log(abs(λ₂)) * δt
+end
+
 function compute_T_star(tmp::Matrix{Float64}, params::NamedTuple, adj_matrix, neighbors::Vector{Int64})
   β = 1 - params.δt
 

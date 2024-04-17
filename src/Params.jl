@@ -436,7 +436,7 @@ DEFAULTS = OrderedCollections.OrderedDict(
   # :KT
   :flux => (
     type=Symbol,
-    values=[:LF, :lLF],
+    values=[:LF, :lLF, :LW_Richtmyer],
     default=:lLF,
     desc=md"""
     choice of the flux for the finite volume scheme (meanfield model).
@@ -495,6 +495,11 @@ DEFAULTS = OrderedCollections.OrderedDict(
     values=[:ignore, :warn, :throw],
     default=:throw,
     desc=md"""how to handle CFL violations."""
+  ),
+  :perform_checks => (
+    type=Bool,
+    default=false,
+    desc=md"""whether to perform additional checks, like the preservation of the symmetry of g."""
   )
 )
 

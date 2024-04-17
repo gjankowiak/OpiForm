@@ -4,6 +4,7 @@ using Distributed
 
 function main()
   @everywhere N_micro = 1000
+  @everywhere N_mfl = 1201
 
   @everywhere function f(tuple)
 
@@ -19,16 +20,19 @@ function main()
 
     base_params = merge(base_params, (
       N_micro=N_micro,
+      N_mfl=N_mfl,
     ))
 
     c_mean_padding = 0.25
 
     params = merge(base_params, (
-      max_iter=8000,
-      store_every_iter=100,
+      max_iter=16000,
+      δt=5e-4,
+      store_every_iter=1000,
+      store_g=false,
       init_method_omega=:from_lfr,
       init_method_adj_matrix=:from_lfr,
-      init_method_f=:from_f_init,
+      init_method_f=:from_kde_omega,
       init_method_g=:from_kde_adj_matrix,
       init_lfr_args=(k_mean, k_max),
       init_lfr_kwargs=(mixing_parameter=µ,
@@ -41,23 +45,24 @@ function main()
       init_lfr_target_n_communities=3
     ))
 
-    prefix = "LFR/N=$(N_micro)/μ=$μ"
+    prefix_old = "LFR/N=$(N_micro)/μ=$μ"
+    prefix_new = "LFR/N_micro=$(N_micro),N_mfl=$(N_mfl)/μ=$μ"
 
     # Run the micro model
-    store_dir_micro = "results/$(prefix)/micro-$(run_id)"
-    params_micro = params
-    try
-      OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
-    catch e
-      @error "Micro run failed"
-      @error e
-      #rethrow()
-      #catch_backtrace()
-      return
-    end
+    store_dir_micro = "results/$(prefix_old)/micro-$(run_id)"
+    # params_micro = params
+    # try
+    #   OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
+    # catch e
+    #   @error "Micro run failed"
+    #   @error e
+    #   #rethrow()
+    #   #catch_backtrace()
+    #   return
+    # end
 
     # Run the meanfield model using the initial data and graph of the micro model (with KDE)
-    store_dir_mfl = "results/$(prefix)/meanfield-$(run_id)"
+    store_dir_mfl = "results/$(prefix_new)/meanfield-$(run_id)"
     params_lLF = merge(params, (
       flux=:lLF, f_dependent_g=false,
       init_method_omega=:from_file,
@@ -66,8 +71,13 @@ function main()
     ))
     try
       OpiForm.MeanField.launch(store_dir_mfl, params_lLF; force=true)
-    catch
+    catch e
       @error "MFL run failed"
+      if e isa String
+        @error e
+      else
+        @error e.msg
+      end
       return
     end
 

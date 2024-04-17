@@ -240,6 +240,22 @@ macro right(v, fill=0.0)
   return esc(:(SA.shiftedarray($v, -1, $fill)))
 end
 
+macro up_mat(v, fill=0.0)
+  return esc(:(SA.shiftedarray($v, (1, 0), $fill)))
+end
+
+macro down_mat(v, fill=0.0)
+  return esc(:(SA.shiftedarray($v, (-1, 0), $fill)))
+end
+
+macro left_mat(v, fill=0.0)
+  return esc(:(SA.shiftedarray($v, (0, 1), $fill)))
+end
+
+macro right_mat(v, fill=0.0)
+  return esc(:(SA.shiftedarray($v, (0, -1), $fill)))
+end
+
 function display_params(params::NamedTuple)
   r = "Parameters:\n"
   for k in keys(params)

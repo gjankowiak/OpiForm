@@ -2,7 +2,7 @@ import OpiForm
 
 function main()
 
-  # for β in [0.0]
+  # for β in [0.2]
   for β in 0:0.1:1
 
     base_dir = get(ARGS, 1, "results/Watts-Strogatz/N=1000/β=$β")

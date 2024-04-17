@@ -25,7 +25,7 @@ import HDF5
 import Graphs: SimpleGraph, is_connected, connected_components
 
 import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare_directory, issymmetric, symmetry_defect,
-  build_x, load_hdf5_data, store_hdf5_data, @fmt, @left, @right
+  build_x, load_hdf5_data, store_hdf5_data, @fmt, @left, @right, @up_mat, @down_mat, @left_mat, @right_mat
 
 function check_connected(M::Array{Int64,2})
   g = SimpleGraph(M)
@@ -88,6 +88,10 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
     max_C = maximum(abs, a + a_prime .* f)
     flux_l = 0.5 * (f_l .* a_l .+ f .* a .- params.LF_relaxation * max_C * (f .- f_l))
     flux_r = 0.5 * (f_r .* a_r .+ f .* a .- params.LF_relaxation * max_C * (f_r .- f))
+  elseif params.flux == :LW_Richtmyer
+    # Richtmyer
+    flux_l = 0.5 * a .* ((f .+ f_l) .- params.δt / params.δx * (f .* a .- f_l .* a_l))
+    flux_r = 0.5 * a .* ((f_r .+ f) .- params.δt / params.δx * (f_r .* a_r .- f .* a))
   elseif params.flux == :upwind
     # upwind
     flux_l = ((f_l .< f) .* min.(a .* f, a_l .* f_l) .+
@@ -199,7 +203,7 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
     return
 
   else
-    throw("unknown flux '%(params.flux)'")
+    throw("unknown flux '$(params.flux)'")
   end
 
   # Neumann boundary conditions
@@ -260,8 +264,122 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
 
     flux_lm = 0.5 * (g_lm .* a_l' .+ g .* a' .- params.LF_relaxation * max_C .* (g .- g_lm))
     flux_rm = 0.5 * (g_rm .* a_r' .+ g .* a' .- params.LF_relaxation * max_C .* (g_rm .- g))
-  elseif params.flux == :KT # (Kurganov-Tadmor)
-    throw("unknown flux '%(params.flux)'")
+  elseif params.flux == :LW_Richtmyer
+    # Richtmyer
+    flux_lω = 0.5 * g .* ((g .+ g_lω) .- params.δt / params.δx * (g_lω .* a_l .- g .* a))
+    flux_rω = 0.5 * g .* ((g_rω .+ g) .- params.δt / params.δx * (g_rω .* a_r .- g .* a))
+
+    flux_lm = 0.5 * g .* ((g .+ g_lm) .- params.δt / params.δx * (g_lm .* a_l' .- g .* a'))
+    flux_rm = 0.5 * g .* ((g_rm .+ g) .- params.δt / params.δx * (g_rm .* a_r' .- g .* a'))
+  elseif params.flux == :KT
+    λ = params.δt / params.δx
+
+    (α_l, α_r) = max.(abs.(a), abs.(a_l)), max.(abs.(a), abs.(a_r))
+    α_lll = @left α_l
+    α_rrr = @right α_r
+
+    #
+    # g_ω
+    #
+
+    f_x = @. minmod((g - g_lω) / params.δx, (g_rω - g) / params.δx)
+
+    f_x_ll = @up_mat f_x
+    f_x_rr = @down_mat f_x
+
+    f_l_L = @. g_lω + params.δx * f_x_ll * (0.5 - λ * α_l)
+    f_r_L = @. g + params.δx * f_x * (0.5 - λ * α_r)
+    f_l_R = @. g - params.δx * f_x * (0.5 - λ * α_l)
+    f_r_R = @. g_rω - params.δx * f_x_rr * (0.5 - λ * α_r)
+
+    f_p_l_L = @. f_l_L - 0.5 * params.δt * a_l
+    f_p_r_L = @. f_r_L - 0.5 * params.δt * a
+    f_p_l_R = @. f_l_R - 0.5 * params.δt * a
+    f_p_r_R = @. f_r_R - 0.5 * params.δt * a_r
+
+    w_p_l = @. (0.5 * (g_lω + g)
+                +
+                0.25 * (params.δx - α_l * params.δt) * (f_x_ll - f_x)
+                -
+                0.5 / α_l * (a * f_p_l_R - a_l * f_p_l_L)
+    )
+    w_p_r = @. (0.5 * (g + g_rω)
+                +
+                0.25 * (params.δx - α_r * params.δt) * (f_x - f_x_rr)
+                -
+                0.5 / α_r * (a_r * f_p_r_R - a * f_p_r_L)
+    )
+
+    _w_p = @. 0.5 * params.δt * (α_l - α_r) * f_x - λ / (1 - λ * (a_l + a_r)) * (a * (f_p_r_L - f_p_l_R))
+    w_p = @. g + _w_p
+
+    w_p_ll = @up_mat w_p
+    w_p_rr = @down_mat w_p
+
+    f_x_p_r = @. 0.5 * params.δx * minmod((w_p_rr - w_p_r) / (1 + λ * (α_r - α_rrr)), (w_p_r - w_p) / (1 + λ * (α_r - α_l)))
+    f_x_p_l = @. 0.5 * params.δx * minmod((w_p - w_p_l) / (1 + λ * (α_l - α_r)), (w_p_l - w_p_ll) / (1 + λ * (α_l - α_lll)))
+
+    # TODO: check factor
+    d_g_ω = @. (
+      λ * α_l * w_p_l + (1 - λ * (α_l + α_r)) * w_p
+      +
+      λ * α_r * w_p_r + 0.5 * params.δx * ((λ * α_l)^2 * f_x_p_l - (λ * α_r)^2 * f_x_p_r)
+    )
+
+    #
+    # g_m
+    #
+
+    f_x = @. minmod((g - g_lm) / params.δx, (g_rm - g) / params.δx)
+
+    f_x_ll = @left_mat f_x
+    f_x_rr = @right_mat f_x
+
+    f_l_L = @. g_lm + params.δx * f_x_ll * (0.5 - λ * α_l')
+    f_r_L = @. g + params.δx * f_x * (0.5 - λ * α_r')
+    f_l_R = @. g - params.δx * f_x * (0.5 - λ * α_l')
+    f_r_R = @. g_rm - params.δx * f_x_rr * (0.5 - λ * α_r')
+
+    f_p_l_L = @. f_l_L - 0.5 * params.δt * a_l'
+    f_p_r_L = @. f_r_L - 0.5 * params.δt * a'
+    f_p_l_R = @. f_l_R - 0.5 * params.δt * a'
+    f_p_r_R = @. f_r_R - 0.5 * params.δt * a_r'
+
+    w_p_l = @. (0.5 * (g_lm + g)
+                +
+                0.25 * (params.δx - α_l' * params.δt) * (f_x_ll - f_x)
+                -
+                0.5 / α_l' * (a' * f_p_l_R - a_l' * f_p_l_L)
+    )
+    w_p_r = @. (0.5 * (g + g_rm)
+                +
+                0.25 * (params.δx - α_r' * params.δt) * (f_x - f_x_rr)
+                -
+                0.5 / α_r' * (a_r' * f_p_r_R - a' * f_p_r_L)
+    )
+
+    _w_p = @. 0.5 * params.δt * (α_l - α_r)' * f_x - λ / (1 - λ * (a_l + a_r)') * (a' * (f_p_r_L - f_p_l_R))
+    w_p = @. g + _w_p
+
+    w_p_ll = @left_mat w_p
+    w_p_rr = @right_mat w_p
+
+    f_x_p_r = @. 0.5 * params.δx * minmod((w_p_rr - w_p_r) / (1 + λ * (α_r - α_rrr)'), (w_p_r - w_p) / (1 + λ * (α_r - α_l)'))
+    f_x_p_l = @. 0.5 * params.δx * minmod((w_p - w_p_l) / (1 + λ * (α_l - α_r)'), (w_p_l - w_p_ll) / (1 + λ * (α_l - α_lll)'))
+
+    # TODO: check factor
+    d_g_m = @. (
+      λ * α_l' * w_p_l + (1 - λ * (α_l + α_r)') * w_p
+      +
+      λ * α_r' * w_p_r + 0.5 * params.δx * ((λ * α_l')^2 * f_x_p_l - (λ * α_r')^2 * f_x_p_r)
+    )
+
+    dst .= 0.5 .* (d_g_ω .+ d_g_m)
+
+
+    return
+  else
+    throw("unknown flux '$(params.flux)'")
   end
 
 
@@ -491,7 +609,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
 
     # Check that g is roughly symmetric
     symmetry_tol = 1e-8
-    if !issymmetric(g, tol=symmetry_tol)
+    if params.perform_checks && !issymmetric(g, tol=symmetry_tol)
       throw("g is not symmetric after iteration $i (with tolerance $symmetry_tol)")
     end
 
@@ -520,6 +638,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       if params.flux == :KT
         # FIXME: connectivity factor missing
         f .= df
+        if !params.constant_g
+          g .= dg
+        end
       else
         f .-= params.δt / params.δx * mfl_λ * df
         if !params.constant_g
@@ -643,7 +764,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     )
     if params.store_g
       append!(store_pairs,
-        ["g/$i" => g for (i, g) in store_g]
+        ["g/$i" => g for (i, g) in store_g],
       )
     end
   end

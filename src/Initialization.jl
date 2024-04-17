@@ -368,7 +368,7 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
 
   lfr_gen_kwargs = filter_nt_fields(in(GEN_KEYS), lfr_kwargs_nt)
 
-  g, c_ids = LFR.lancichinetti_fortunato_radicchi(params.N_micro, lfr_args...; lfr_gen_kwargs...)
+  g, c_ids = LFR.lancichinetti_fortunato_radicchi(params.N_micro, lfr_args...; seed=rand(Int32), lfr_gen_kwargs...)
 
   idc_sort = sortperm(c_ids)
   inv_idc_sort = invperm(idc_sort)

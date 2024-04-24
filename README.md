@@ -4,7 +4,7 @@
 
 This one liner will setup OpiForm for you:
 
-    curl https://raw.githubusercontent.com/gjankowiak/OpiForm_alpha/master/install.sh | bash
+    curl https://raw.githubusercontent.com/gjankowiak/OpiForm/master/install.sh | bash
 
 ## Usage
 

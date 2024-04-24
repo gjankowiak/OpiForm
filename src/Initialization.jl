@@ -396,9 +396,9 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
   for i in 1:n_communities
     µ = community_means[i]
     σ² = lfr_kwargs_nt.β_σ²
-    ν = μ * (1 - μ) / σ² - 1
-    local a = μ * ν
-    local b = (1 - μ) * ν
+    ν = µ * (1 - µ) / σ² - 1
+    local a = µ * ν
+    local b = (1 - µ) * ν
     beta_dist = Distributions.Beta(a, b)
 
     idc = searchsorted(c_ids_sorted, i)

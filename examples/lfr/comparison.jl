@@ -11,6 +11,7 @@ function main()
   #base_dir = get(ARGS, 1, "results/LFR/N=1000")
   base_dir = get(ARGS, 1, "results/LFR/N_micro=1000,N_mfl=601/")
   base_dir = get(ARGS, 1, "results/LFR/N_micro=1000,N_mfl=1201/")
+  base_dir = get(ARGS, 1, "results/LFR/N_micro=1000,N_mfl=301/")
 
   @info "Using base directory $(base_dir)"
 
@@ -35,7 +36,7 @@ function main()
     end
   end
 
-  OpiForm.compare_variance_lfr_EA(mfl_dirs, micro_dirs; cutoff_factor=0.4)
+  OpiForm.compare_variance_lfr_EA(mfl_dirs, micro_dirs; cutoff_factor=0.2, t_max=10, stddev_min=10^(-2.5))
 
 end
 

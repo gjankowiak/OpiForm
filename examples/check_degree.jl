@@ -69,16 +69,14 @@ function plot_degree(aggregates, param_name::String;
   offset = offset_factor / stride
   ax1 = M.Axis(fig[1, 1], xlabel="degree distribution", backgroundcolor=(:white, 0.5), yticks=((1:length(labels)) .* offset, labels), xscale=xscale)
   ax2 = M.Axis(fig[1, 2], xlabel="assortativity distribution", backgroundcolor=(:white, 0.5), yticks=((1:length(labels)) .* offset, labels), xscale=xscale)
-  ax3 = M.Axis(fig[1, 3], xlabel="T*", backgroundcolor=(:white, 0.5), yticks=((1:length(labels)) .* offset, labels), xscale=xscale)
+  ax3 = M.Axis(fig[1, 3], xlabel="T*", backgroundcolor=(:white, 0.5), yticks=((1:length(labels)) .* offset, labels), xscale=log10)
   ax4 = M.Axis(fig[1, 4], xlabel="Clustering coefficitent", backgroundcolor=(:white, 0.5), yticks=((1:length(labels)) .* offset, labels))
 
   M.hideydecorations!(ax2, grid=false)
   M.hideydecorations!(ax3, grid=false)
   M.hideydecorations!(ax4, grid=false)
 
-  M.linkyaxes!(ax1, ax2)
-  M.linkyaxes!(ax1, ax3)
-  M.linkyaxes!(ax1, ax4)
+  M.linkyaxes!(ax1, ax2, ax3, ax4)
 
   for (i, a) in enumerate(sorted_aggregates)
 
@@ -231,6 +229,8 @@ function check_degree(base_dir::String, extractor::Symbol;
   fig = plot_degree(aggregates, param_names[extractor];
     xscale=xscale, stride=stride, offset_factor=offset_factor, max_degree=max_degree)
   suffix = splitpath(base_dir)[end]
-  M.save("plots/check_degree_$(extractor)_$(suffix)_$(xscale).pdf", fig)
-  M.save("plots/check_degree_$(extractor)_$(suffix)_$(xscale).svg", fig)
+  # M.save("plots/check_degree_$(extractor)_$(suffix)_$(xscale).pdf", fig)
+  # M.save("plots/check_degree_$(extractor)_$(suffix)_$(xscale).svg", fig)
+  M.save("$(base_dir)/graph_analysis.pdf", fig)
+  M.save("$(base_dir)/graph_analysis.svg", fig)
 end

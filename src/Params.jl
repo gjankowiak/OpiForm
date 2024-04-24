@@ -19,12 +19,14 @@
 
 module Params
 
-export get_default_params, DEFAULTS
+export get_default_params, DEFAULTS, build_f_init_func_beta
 
 import OrderedCollections
 import Markdown: @md_str
 
 import Polynomials
+import SpecialFunctions: beta
+import Random: randperm
 
 import TOML
 
@@ -35,6 +37,48 @@ end
 function f_init_func_cosine(ω::Float64)
   h = (x) -> abs(x) <= 1 ? 0.5 * (1 - cos(π * (x - 1))) : 0.0
   return 0.5 * h(4 * (ω - 0.5)) + h(3(ω + 0.50))
+end
+
+function build_f_init_func_beta(; n_communities::Int64=3, σ²::Float64=1e-3, expectation_bounds=nothing)
+  scale_to_01 = x -> 0.5 * (x + 1)
+  scale_from_01 = x -> 2x - 1
+
+  bounds = if isnothing(expectation_bounds)
+    [-0.75; 0.75]
+  else
+    collect(expectation_bounds)
+  end
+
+  bounds_01 = scale_to_01.(bounds)
+
+  if n_communities == 1
+    community_means = [0.5]
+  else
+    community_means = collect(range(bounds_01..., length=n_communities))[randperm(n_communities)]
+  end
+
+  warned = false
+
+  beta_args = map(community_means) do µ
+    ν = µ * (1 - µ) / σ² - 1
+    α, β = (µ * ν, (1 - µ) * ν)
+    if !warned && (α < 1 || β < 1)
+      @warn "β distribution is singular! Expect inaccuracies."
+      warned = true
+    end
+    return (α - 1, β - 1, 1 / beta(α, β))
+  end
+
+  function pdf(x::Float64; scaling::Float64=1.0)
+    f = 0.0
+    x_scaled = scale_to_01(x)
+    for args in beta_args
+      f += args[3] * x_scaled^args[1] * (1 - x_scaled)^args[2]
+    end
+    return scaling * f
+  end
+
+  return x -> pdf.(x; scaling=1 ./ n_communities)
 end
 
 function α_init_func(ω::Float64, m::Float64)

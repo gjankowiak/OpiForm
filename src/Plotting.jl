@@ -113,7 +113,6 @@ function plot_results(; output_filename::String="",
     return
   end
 
-
   half_connection_matrix = get(kwargs, :half_connection_matrix, false)
   center_histogram = get(kwargs, :center_histogram, false)
 
@@ -132,9 +131,6 @@ function plot_results(; output_filename::String="",
     i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
     f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
     params_mfl_a = map(load_metadata, meanfield_dirs)
-
-    α_init_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "alpha"), meanfield_dirs)
-    has_alpha = map(α -> !isnothing(α), α_init_a)
 
     N_micro_mfl_a = map(dn -> (
         meta = TOML.parsefile(joinpath(dn, "metadata.toml"));
@@ -167,6 +163,7 @@ function plot_results(; output_filename::String="",
     params_d = Params.from_toml(micro_dir)
 
     N_micro = size(ω, 1)
+
     if !isnothing(adj_matrix)
       graph = Graphs.SimpleGraphs.SimpleGraph(adj_matrix)
 
@@ -223,7 +220,6 @@ function plot_results(; output_filename::String="",
     end
   end
 
-
   set_makie_backend(:gl)
 
   warning = center_histogram ? " !!! The ω_i have been centered to ω_∞ (from MF initial data)" : ""
@@ -264,7 +260,6 @@ function plot_results(; output_filename::String="",
   if has_mfl
     obs_f_a = [M.@lift f_a[k][:, $obs_i] for k in 1:K_mfl]
     # DEFINITION G
-    # obs_fαf_a = [M.@lift f_a[k][:, $obs_i] .* α_init_a[k] .* f_a[k][:, $obs_i]' / params_mfl_a[k]["connection_density"] for k in 1:K_mfl]
 
     function find_support(f_a)
       left_idc = map(f -> (idx = findfirst(x -> x > 1e-5, f[]); return (isnothing(idx) ? 1 : idx)), f_a)
@@ -438,6 +433,162 @@ function plot_results(; output_filename::String="",
 
   println()
 
+end
+
+function plot_results_no_g(; output_filename::String="",
+  meanfield_dirs::Vector{String}=String[],
+  micro_dirs::Vector{String}=String[],
+  kwargs...)
+
+  # check that the dirs actually exist
+  @assert all(isdir, meanfield_dirs)
+  @assert all(isdir, micro_dirs)
+
+  has_mfl, has_d = length(meanfield_dirs) > 0, length(micro_dirs) > 0
+
+  K_mfl = length(meanfield_dirs)
+
+  if !(has_mfl || has_d)
+    @error "No dir provided"
+    return
+  end
+
+  obs_i = M.Observable(1)
+  obs_iter = M.Observable(0)
+
+  if has_mfl
+    labels = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), meanfield_dirs)
+    i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
+    i_mfl = i_mfl_a[1]
+    f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
+    f_avg = sum(f_a) / length(f_a)
+    f_avg = f_a[1]
+    N_mfl = size(f_avg, 1)
+
+    x = map(build_x, N_mfl)
+  end
+
+  if has_d
+    ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
+    ω_concat = vcat(ω_a...)
+    i_d = load_hdf5_data(joinpath(micro_dirs[1], "data.hdf5"), "i")
+    params_d = Params.from_toml(micro_dirs[1])
+  end
+
+  obs_ω = M.@lift ω_concat[:, $obs_i]
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1])
+  ax1.title = "f / ω_i (ensemble averages)"
+
+  if has_mfl
+    obs_f_avg = M.@lift f_avg[:, $obs_i]
+    # DEFINITION G
+
+    function find_support(f_a)
+      left_idc = begin
+        idx = findfirst(x -> x > 1e-5, obs_f_avg[])
+        isnothing(idx) ? 1 : idx
+      end
+      right_idc = begin
+        idx = findlast(x -> x > 1e-5, obs_f_avg[])
+        isnothing(idx) ? length(obs_f_avg[]) : idx
+      end
+
+      left_x = x[left_idc]
+      right_x = x[right_idc]
+
+      if has_d
+        return (left=min(minimum(obs_ω[]), minimum(left_x)), right=max(maximum(obs_ω[]), maximum(right_x)))
+      else
+        return (left=minimum(left_x), right=maximum(right_x))
+      end
+    end
+
+    function find_max(f_a)
+      return maximum(f_a[])
+    end
+
+    M.lines!(ax1, x, obs_f_avg, label="MFL", color=:black, linewidth=2)
+  end
+
+  if has_d
+
+    M.hist!(ax1, obs_ω; bins=2 * N_mfl, normalization=:pdf)
+
+  end
+
+  stride = get(kwargs, :stride, 1)
+  first_idx = get(kwargs, :first_idx, 1)
+  last_idx = get(kwargs, :last_idx, lastindex(i_mfl))
+  i_range = enumerate([fill(1, 5); first_idx:stride:last_idx; fill(last_idx, 5)])
+
+  function step_i(ii_i_tuple)
+
+    ii, i = ii_i_tuple
+
+    iter = i_mfl_a[1][i]
+
+    pct = lpad(Int(round(100 * ii / length(i_range))), 3, " ")
+    print("  Creating movie: $pct%" * "\b"^50 * ", current iteration: $iter")
+
+    if has_mfl && any(f -> any(isnan, f[:, i]), f_a)
+      return
+    end
+
+    obs_i[] = i
+    obs_iter[] = iter
+    if has_mfl
+      first_mass = 2 / N_mfl * sum(f_a[1][:, i])
+      ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
+    else
+      ax1.title = string(iter)
+    end
+
+    if has_mfl
+      support = find_support(obs_f_avg)
+      max_f = find_max(obs_f_avg)
+      M.ylims!(ax1, low=max(-1, -0.05 * max_f), high=1.3 * max_f)
+      # M.xlims!(ax1, low=support.left, high=support.right)
+    else
+      M.autolimits!(ax1)
+    end
+
+  end
+
+  dirs = vcat(meanfield_dirs, micro_dirs)
+  prefix = longest_prefix(dirs, existing_dir=true)
+
+  effective_output_filename = "$prefix/movie_without_g.mp4"
+
+  M.record(step_i, fig, effective_output_filename, i_range, framerate=3)
+  @info ("movie saved at $effective_output_filename")
+
+  println()
+
+end
+
+function plot_g_init(store_dir::String; g_max::Float64=2.0)
+  g = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "g_init")
+
+  x = build_x(size(g, 1))
+
+  fig = M.Figure(size=(100, 100), figure_padding=0)
+  ax = M.Axis(fig[1, 1], aspect=1)
+  #ax.title = "g(ω,m)"L
+  M.hidedecorations!(ax)
+  M.hidespines!(ax)
+
+  δx = x[2] - x[1]
+  int_g = sum(g) * δx^2
+
+  @show int_g
+
+  M.heatmap!(ax, x, x, g, colorrange=(0, g_max), colormap=:ice)
+  #M.heatmap!(ax, x, x, g, colorrange=(1e-3, g_max), colormap=:haline, lowclip=:black)
+  M.tightlimits!(ax)
+
+  M.save("$store_dir/g_init.png", fig)
 end
 
 function get_ω_inf_mfl(dir::String)
@@ -691,9 +842,10 @@ function compare_variance_ensemble_average(
   meanfield_dirs::Vector{String},
   micro_dirs::Vector{String},
   parameter_name::String,
-  parameter_extractor::Function
-  ;
+  parameter_extractor::Function;
   cutoff_factor::Float64=1.0,
+  t_max::Real=0,
+  stddev_min::Real=0
 )
 
   # check that the dirs actually exist
@@ -839,8 +991,7 @@ function compare_variance_ensemble_average(
   ax3 = M.Axis(fig[1, 3], xlabel="T*", ylabel="Convergence rate", xscale=log10)
   ax4 = M.Axis(fig[1, 4], xlabel="Clustering coeff.", xscale=identity)
 
-  M.linkyaxes!(ax2, ax3)
-  M.linkyaxes!(ax2, ax4)
+  M.linkyaxes!(ax2, ax3, ax4)
 
   M.vspan!(ax1, 0.0, cutoff_factor * params_mfl_a[1].δt * i_mfl_a[1][end]; color=(:blue, 0.1))
 
@@ -865,8 +1016,16 @@ function compare_variance_ensemble_average(
   M.lines!(ax4, clustering, d_rates, label="Micro", linestyle=:dot, color=:blue)
   M.lines!(ax4, clustering, mfl_rates, label="MFL", color=:blue)
 
+  if t_max > 0
+    M.xlims!(ax1, low=0, high=t_max)
+  end
+
+  if stddev_min > 0
+    M.ylims!(ax1, low=stddev_min)
+  end
+
   M.axislegend(ax1)
-  M.axislegend(ax2)
+  M.axislegend(ax2, position=:lt)
   M.axislegend(ax3)
   M.axislegend(ax4)
 
@@ -929,13 +1088,17 @@ end
 function compare_variance_lfr_EA(
   meanfield_dirs::Vector{String},
   micro_dirs::Vector{String};
-  cutoff_factor::Float64=1.0
+  cutoff_factor::Float64=1.0,
+  t_max::Real=0,
+  stddev_min::Real=0
 )
   compare_variance_ensemble_average(
     meanfield_dirs,
     micro_dirs,
     "µ (LFR)",
     x -> x.init_lfr_kwargs.mixing_parameter;
-    cutoff_factor=cutoff_factor
+    cutoff_factor=cutoff_factor,
+    t_max=t_max,
+    stddev_min=stddev_min
   )
 end

@@ -419,39 +419,46 @@ function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, 
   # Alernative 1: params.δx * sum(params.EC_mask_matrix; dims=2) -- unstable with lLF
 
   # compute EC
-  if params.normalize_chambers
-    chamber_size = params.δx * sum(params.EC_mask_matrix; dims=2)
+  if params.σ < 1
+    if params.normalize_chambers
+      chamber_size = params.δx * sum(params.EC_mask_matrix; dims=2)
+    else
+      chamber_size = 1.0
+    end
+    chamber_mass = params.δx * sum(f' .* params.EC_mask_matrix; dims=2) ./ chamber_size
+    chamber_mass_inv = 1 ./ chamber_mass
+    chamber_mass_inv[chamber_mass_inv.>1/params.int_threshold] .= 0.0
+    # p = chamber_mass_inv' .* f .* params.EC_mask_matrix
+    p = chamber_mass_inv .* f .* params.EC_mask_matrix
+    µ = params.δx * sum(params.x' .* p; dims=2) ./ chamber_size
+    µ_dst .= µ
+
+    if params.normalize_chambers
+      chamberC_size = params.δx * sum((1 .- params.EC_mask_matrix); dims=2)
+    else
+      chamberC_size = 1.0
+    end
+    chamberC_mass = params.δx * sum(f' .* (1 .- params.EC_mask_matrix); dims=2) ./ chamberC_size
+    chamberC_mass_inv = 1 ./ chamber_mass
+    chamberC_mass_inv[chamberC_mass_inv.>1/params.int_threshold] .= 0.0
+    pC = chamberC_mass_inv .* f .* (1 .- params.EC_mask_matrix)
+    µC = params.δx * sum(params.x' .* pC; dims=2) ./ chamberC_size
+    µC_dst .= µC
+
+    EC_in = params.R_func.(params.x .- µ)
+    EC_out = params.P_func.(µ .- μC)
+
+    a_dst .= params.σ .* EB .+ (1 - params.σ) * (
+      chamber_mass .* EC_in .+ chamberC_mass .* EC_out
+    )
+    if params.approx_a_prime
+      a_prime_dst .= (1 - params.σ) * params.δx .* (EC_in ./ chamber_size .+ EC_out ./ chamberC_size)
+    end
   else
-    chamber_size = 1.0
-  end
-  chamber_mass = params.δx * sum(f' .* params.EC_mask_matrix; dims=2) ./ chamber_size
-  chamber_mass_inv = 1 ./ chamber_mass
-  chamber_mass_inv[chamber_mass_inv.>1/params.int_threshold] .= 0.0
-  # p = chamber_mass_inv' .* f .* params.EC_mask_matrix
-  p = chamber_mass_inv .* f .* params.EC_mask_matrix
-  µ = params.δx * sum(params.x' .* p; dims=2) ./ chamber_size
-  µ_dst .= µ
-
-  if params.normalize_chambers
-    chamberC_size = params.δx * sum((1 .- params.EC_mask_matrix); dims=2)
-  else
-    chamberC_size = 1.0
-  end
-  chamberC_mass = params.δx * sum(f' .* (1 .- params.EC_mask_matrix); dims=2) ./ chamberC_size
-  chamberC_mass_inv = 1 ./ chamber_mass
-  chamberC_mass_inv[chamberC_mass_inv.>1/params.int_threshold] .= 0.0
-  pC = chamberC_mass_inv .* f .* (1 .- params.EC_mask_matrix)
-  µC = params.δx * sum(params.x' .* pC; dims=2) ./ chamberC_size
-  µC_dst .= µC
-
-  EC_in = params.R_func.(params.x .- µ)
-  EC_out = params.P_func.(µ .- μC)
-
-  a_dst .= params.σ .* EB .+ (1 - params.σ) * (
-    chamber_mass .* EC_in .+ chamberC_mass .* EC_out
-  )
-  if params.approx_a_prime
-    a_prime_dst .= (1 - params.σ) * params.δx .* (EC_in ./ chamber_size .+ EC_out ./ chamberC_size)
+    a_dst .= EB
+    if params.approx_a_prime
+      a_prime_dst .= 0.0
+    end
   end
 end
 
@@ -494,7 +501,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   end
 
   # Echo chamber mask matrix
-  if params_in.EC_type == :characteristic
+  if params_in.σ == 1
+    EC_mask_matrix = nothing
+  elseif params_in.EC_type == :characteristic
     EC_idx_span = Int(floor(min(N_mfl - 1, params_in.EC_ρ / δx)))
     EC_mask_matrix = SpA.spdiagm([i => ones(N_mfl - abs(i)) for i in -EC_idx_span:EC_idx_span]...)
   elseif params_in.EC_type == :super_gaussian

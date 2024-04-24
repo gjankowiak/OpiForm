@@ -1,10 +1,23 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
 cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
+title: OpiForm
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
 authors:
-  - family-names: Jankowiak
-    given-names: Gaspard
-    orcid: https://orcid.org/0000-0002-9025-1465
-title: "My Research Software"
-version: 0.1.0
-identifiers:
-date-released: 2024-04-01
+  - given-names: Gaspard
+    family-names: Jankowiak
+    email: gaspard.jankowiak@uni-graz.at
+    affiliation: Universität Graz
+    orcid: 'https://orcid.org/0000-0002-9025-1465'
+repository-code: 'https://github.com/gjankowiak/OpiForm'
+url: 'https://github.com/gjankowiak/OpiForm'
+keywords:
+  - juila
+  - opinion formation
+  - agent based model
+  - kinetic equation
+license: GPL-3.0-or-later

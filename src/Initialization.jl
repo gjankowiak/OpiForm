@@ -413,7 +413,7 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
 
   ω_0 = ω_0[inv_idc_sort]
 
-  return SpA.sparse(g), ω_0, c_ids
+  return SpA.sparse(g), ω_0, c_ids, scale_from_01.(community_means)
 end
 
 function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbol)
@@ -461,10 +461,10 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       @assert !isnothing(adj_matrix)
     elseif params.init_method_adj_matrix == :from_lfr
       tries = 0
-      adj_matrix, ω_0, c_ids = nothing, nothing, nothing
+      adj_matrix, ω_0, c_ids, c_expectations = nothing, nothing, nothing, nothing
       while tries < params.init_lfr_max_tries
         tries += 1
-        adj_matrix, ω_0, c_ids = initialize_LFR(params, params.init_lfr_args...; params.init_lfr_kwargs...)
+        adj_matrix, ω_0, c_ids, c_expectations = initialize_LFR(params, params.init_lfr_args...; params.init_lfr_kwargs...)
         if params.init_lfr_target_n_communities > 0 && (length(unique(c_ids)) == params.init_lfr_target_n_communities)
           break
         end
@@ -547,6 +547,9 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
 
       open(joinpath(store_dir, "c_ids.csv"), "w") do c_ids_csv
         writedlm(c_ids_csv, c_ids)
+      end
+      open(joinpath(store_dir, "c_expectations.csv"), "w") do c_expectations_csv
+        writedlm(c_expectations_csv, c_expectations)
       end
     end
 

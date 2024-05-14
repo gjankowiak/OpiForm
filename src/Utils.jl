@@ -199,7 +199,14 @@ function store_hdf5_sparse(filename::String, key::String, A::SpA.SparseMatrixCSC
   end
 end
 
-function load_hdf5_sparse(filename::String, key::String)::SpA.SparseMatrixCSC
+
+function load_hdf5_sparse(filename::String, key::String; cids_fn::String="")::SpA.SparseMatrixCSC
+
+  function get_ids(fn)
+    f = open(fn, "r")
+    return map(Int, vec(readdlm(f)))
+  end
+
   h5 = HDF5.h5open(filename, "r")
   try
     m = read(h5["$key/m"])
@@ -208,7 +215,23 @@ function load_hdf5_sparse(filename::String, key::String)::SpA.SparseMatrixCSC
     j = read(h5["$key/j"])
     v = read(h5["$key/v"])
     close(h5)
-    return SpA.sparse(i, j, v, m, n)
+
+    if !isempty(cids_fn)
+      c_ids = get_ids(cids_fn)
+      idx_a = sortperm(c_ids)
+      inv_idx_a = invperm(idx_a)
+
+      rank = (i) -> inv_idx_a[i]
+
+      i_sorted = collect(map(rank, i))
+      j_sorted = collect(map(rank, j))
+      v_sorted = collect(map(rank, v))
+
+      return SpA.sparse(i_sorted, j_sorted, v_sorted, m, n)
+    else
+      return SpA.sparse(i, j, v, m, n)
+    end
+
   catch
     close(h5)
     return nothing

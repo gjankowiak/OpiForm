@@ -45,7 +45,7 @@ import LinearAlgebra as LA
 
 import Serialization
 
-import DelimitedFiles: writedlm
+import DelimitedFiles: writedlm, readdlm
 
 import LFRBenchmarkGraphs as LFR
 import Random

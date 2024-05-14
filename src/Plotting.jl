@@ -993,7 +993,9 @@ function compare_variance_ensemble_average(
 
   M.linkyaxes!(ax2, ax3, ax4)
 
-  M.vspan!(ax1, 0.0, cutoff_factor * params_mfl_a[1].δt * i_mfl_a[1][end]; color=(:blue, 0.1))
+  mfl_cutoff = cutoff_factor * params_mfl_a[1].δt * i_mfl_a[1][end]
+
+  M.vspan!(ax1, 0.0, mfl_cutoff; color=(:blue, 0.1))
 
   for (i, a_d) in enumerate(aggregates_d)
     label = i == 1 ? "Micro" : nothing
@@ -1041,6 +1043,8 @@ function compare_variance_ensemble_average(
     @error "Cannot display plot window, are you logged in over SSH?"
   end
 
+  return (aggregates_micro=aggregates_d, aggregates_mfl=aggregates_mfl, mfl_cutoff=mfl_cutoff)
+
 end
 
 function compare_variance_er_EA(
@@ -1048,7 +1052,7 @@ function compare_variance_er_EA(
   micro_dirs::Vector{String};
   cutoff_factor::Float64=1.0
 )
-  compare_variance_ensemble_average(
+  return compare_variance_ensemble_average(
     meanfield_dirs,
     micro_dirs,
     "p (Erdos-Renyi)",
@@ -1062,7 +1066,7 @@ function compare_variance_ws_EA(
   micro_dirs::Vector{String};
   cutoff_factor::Float64=1.0
 )
-  compare_variance_ensemble_average(
+  return compare_variance_ensemble_average(
     meanfield_dirs,
     micro_dirs,
     "k (Watts-Strogatz)",
@@ -1076,7 +1080,7 @@ function compare_variance_ba_EA(
   micro_dirs::Vector{String};
   cutoff_factor::Float64=1.0
 )
-  compare_variance_ensemble_average(
+  return compare_variance_ensemble_average(
     meanfield_dirs,
     micro_dirs,
     "k (Barabasi-Albert)",
@@ -1092,7 +1096,7 @@ function compare_variance_lfr_EA(
   t_max::Real=0,
   stddev_min::Real=0
 )
-  compare_variance_ensemble_average(
+  return compare_variance_ensemble_average(
     meanfield_dirs,
     micro_dirs,
     "µ (LFR)",

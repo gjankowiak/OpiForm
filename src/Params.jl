@@ -19,7 +19,7 @@
 
 module Params
 
-export get_default_params, DEFAULTS, build_f_init_func_beta
+export get_default_params, DEFAULTS, build_f_init_func_beta, build_f_init_func_beta_weighted
 
 import OrderedCollections
 import Markdown: @md_str
@@ -39,9 +39,47 @@ function f_init_func_cosine(ω::Float64)
   return 0.5 * h(4 * (ω - 0.5)) + h(3(ω + 0.50))
 end
 
-function build_f_init_func_beta(; n_communities::Int64=3, σ²::Float64=1e-3, expectation_bounds=nothing)
+function build_f_init_func_beta_weighted(; communities::Vector{Int64}, community_expectations::Vector{Float64},
+  σ²::Float64=1e-3, scale_expectations::Bool=true)
+
+  # count the number of agent per communities
+  counts = [count(==(i), communities) for i in sort(unique(communities))]
+  weights = counts ./ size(communities, 1)
+
   scale_to_01 = x -> 0.5 * (x + 1)
-  scale_from_01 = x -> 2x - 1
+
+  expectations_01 = if scale_expectations
+    scale_to_01.(community_expectations)
+  else
+    community_expectations
+  end
+
+  warned = false
+
+  beta_args = map(expectations_01) do µ
+    ν = µ * (1 - µ) / σ² - 1
+    α, β = (µ * ν, (1 - µ) * ν)
+    if !warned && (α < 1 || β < 1)
+      @warn "β distribution is singular! Expect inaccuracies."
+      warned = true
+    end
+    return (α - 1, β - 1, 1 / beta(α, β))
+  end
+
+  function pdf(x::Float64)
+    f = 0.0
+    x_scaled = scale_to_01(x)
+    for (i, args) in enumerate(beta_args)
+      f += weights[i] * (args[3] * x_scaled^args[1] * (1 - x_scaled)^args[2])
+    end
+    return f
+  end
+
+  return x -> pdf.(x)
+end
+
+function build_f_init_func_beta(; n_communities::Int64=3, σ²::Float64=1e-3, expectation_bounds=nothing, side::Symbol=:middle)
+  scale_to_01 = x -> 0.5 * (x + 1)
 
   bounds = if isnothing(expectation_bounds)
     [-0.75; 0.75]
@@ -52,7 +90,13 @@ function build_f_init_func_beta(; n_communities::Int64=3, σ²::Float64=1e-3, ex
   bounds_01 = scale_to_01.(bounds)
 
   if n_communities == 1
-    community_means = [0.5]
+    community_means = scale_to_01.(if side == :left
+      [-0.75]
+    elseif side == :right
+      return [0.75]
+    else
+      return [0.0]
+    end)
   else
     community_means = collect(range(bounds_01..., length=n_communities))[randperm(n_communities)]
   end

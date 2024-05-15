@@ -1,5 +1,8 @@
 using Distributed
+import REPL.TerminalMenus as TM
+
 @everywhere import OpiForm
+@everywhere import DelimitedFiles
 # import OpiForm
 
 function main()
@@ -8,7 +11,7 @@ function main()
 
   @everywhere function f(tuple)
 
-    run_id, μ = tuple
+    run_id, μ, β_σ² = tuple
 
     k_mean = 15
     k_max = 40
@@ -24,6 +27,7 @@ function main()
     ))
 
     c_mean_padding = 0.25
+    expectation_bounds = (-1 + c_mean_padding, 1 - c_mean_padding)
 
     params = merge(base_params, (
       max_iter=25000,
@@ -32,7 +36,7 @@ function main()
       store_g=false,
       init_method_omega=:from_lfr,
       init_method_adj_matrix=:from_lfr,
-      init_method_f=:from_kde_omega,
+      init_method_f=:from_f_init,
       init_method_g=:from_kde_adj_matrix,
       init_lfr_args=(k_mean, k_max),
       init_lfr_kwargs=(mixing_parameter=μ,
@@ -40,32 +44,36 @@ function main()
         nmax=nmax,
         µ_community_bounds=(-1 + c_mean_padding, 1 - c_mean_padding),
         µ_community_distrib=:equidistributed,
-        β_σ²=1e-2,
+        β_σ²=β_σ²,
       ),
       init_lfr_target_n_communities=3
     ))
 
-    prefix = "LFR/N_micro=$(N_micro),N_mfl=$(N_mfl)/μ=$μ"
+    prefix = "LFR/N_micro=$(N_micro),N_mfl=$(N_mfl)/σ²=$(β_σ²)/μ=$μ"
 
     # Run the micro model
     store_dir_micro = "results/$(prefix)/micro-$(run_id)"
     params_micro = params
-    try
-      OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
-    catch e
-      @error "Micro run failed"
-      if e isa String
-        @error e
-      else
-        @error e.msg
-      end
-      return
-    end
+    # try
+    #   OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
+    # catch e
+    #   @error "Micro run failed"
+    #   if e isa String
+    #     @error e
+    #   else
+    #     @error e.msg
+    #   end
+    #   return
+    # end
+
+    c_ids = vec(map(Int, DelimitedFiles.readdlm(joinpath(store_dir_micro, "c_ids.csv"))))
+    c_expectations = vec(DelimitedFiles.readdlm(joinpath(store_dir_micro, "c_expectations.csv")))
 
     # Run the meanfield model using the initial data and graph of the micro model (with KDE)
     store_dir_mfl = "results/$(prefix)/meanfield-$(run_id)"
     params_lLF = merge(params, (
       flux=:lLF, f_dependent_g=false,
+      f_init_func=OpiForm.Params.build_f_init_func_beta_weighted(; communities=c_ids, community_expectations=c_expectations, σ²=β_σ²),
       init_method_omega=:from_file,
       init_method_adj_matrix=:from_file,
       init_micro_filename=joinpath(store_dir_micro, "data.hdf5"),
@@ -81,21 +89,36 @@ function main()
       end
       return
     end
-
-    # OpiForm.compare_variance([
-    #     store_dir_mfl
-    #   ], [
-    #     store_dir_micro
-    #   ])
   end
 
-  #μs = 10 .^ (range(-3, 0, 10))
-
-  μs = [1e-3; 5e-3; 1e-2; range(0.05, 1.0, 20)]
+  µs = [1e-3; 5e-3; 1e-2; 5e-1; range(0.05, 1.0, 7)]
+  β_σ²s = [1e-3, 4e-3, 1.2e-2]
+  #β_σ²s = [1e-3, 2e-3, 4e-3, 1.2e-2]
 
   n_runs = 5
 
-  pmap(f, Iterators.product(1:n_runs, µs))
+  pmap(f, Iterators.product(1:n_runs, µs, β_σ²s))
+
+  # Postprocessing
+
+  include("./comparison.jl")
+  include("./plot_g.jl")
+
+  perform_comparison()
+  create_g_plots()
+
+
+  options = ["no", "yes"]
+  menu = TM.RadioMenu(options)
+  choice = TM.request("Create movies (will take a long time)?", menu)
+
+  if choice == 2
+    include("./movies.jl")
+    @info "creating movies"
+    create_movies()
+  end
+
+  @info "All done!"
 
 end
 

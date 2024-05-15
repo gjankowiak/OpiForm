@@ -1,6 +1,6 @@
 import OpiForm
 
-function main()
+function create_g_plots()
   base_dir = get(ARGS, 1, "results/LFR/N_micro=1000,N_mfl=301/")
 
   @info "Using base directory $(base_dir)"
@@ -22,5 +22,3 @@ function main()
     OpiForm.plot_g_init(d; g_max=5.0)
   end
 end
-
-main()

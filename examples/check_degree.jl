@@ -1,11 +1,7 @@
 import OpiForm
-import CairoMakie as C
-import GLMakie as GL
+import CairoMakie as M
 import Graphs
 import TOML
-
-M = C
-M.activate!()
 
 function extract(dir_name::String, parameter_extractor::Function)
   params = OpiForm.Params.from_toml(dir_name)

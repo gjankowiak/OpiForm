@@ -334,3 +334,20 @@ end
 function split_run_path(fns::Vector{String})
   return map(x -> (y = split(x, "-"); (join(y[1:end-1], "-"), last(y))), fns)
 end
+#
+# The β distribution has support on [0, 1], these are helper functions to scale to and back from [0, 1]
+scale_to_01 = x -> 0.5 * (x + 1)
+scale_from_01 = x -> 2x - 1
+
+function load_lfr_community_data(dir::String)
+  c_ids = vec(map(Int, readdlm(joinpath(dir, "c_ids.csv"))))
+  c_expectations = vec(readdlm(joinpath(dir, "c_expectations.csv")))
+  return c_ids, c_expectations
+end
+
+function beta_μσ²_to_ab(μ, σ²)
+  ν = µ * (1 - µ) / σ² - 1
+  a = µ * ν
+  b = (1 - µ) * ν
+  return a, b
+end

@@ -354,51 +354,30 @@ else
   filter
 end
 
-
-function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
-
-  lfr_kwargs_nt = (; lfr_kwargs...)
-
-  # The β distribution has support on [0, 1], these are helper functions to scale to and back from [0, 1]
-  scale_to_01 = x -> 0.5 * (x + 1)
-  scale_from_01 = x -> 2x - 1
-
-  GEN_KEYS = [:is_directed, :nmin, :nmax, :tau, :tau2, :fixed_range, :mixing_parameter,
-    :overlapping_nodes, :overlap_membership, :excess, :defect, :seed, :clustering_coeff]
-
-  lfr_gen_kwargs = filter_nt_fields(in(GEN_KEYS), lfr_kwargs_nt)
-
-  g, c_ids = LFR.lancichinetti_fortunato_radicchi(params.N_micro, lfr_args...; seed=rand(Int32), lfr_gen_kwargs...)
+function generate_LFR_ω(params::NamedTuple, c_ids, community_means)
+  println("Entering generate_LFR_ω")
 
   idc_sort = sortperm(c_ids)
   inv_idc_sort = invperm(idc_sort)
   c_ids_sorted = c_ids[idc_sort]
 
-  n_communities = length(unique(c_ids_sorted))
-  @info "[LFR] generated graph with $(n_communities) communities"
-  #
-  # rescale bounds to [0, 1]
-  bounds = collect(lfr_kwargs_nt.µ_community_bounds)
-  bounds_01 = scale_to_01.(bounds)
+  println("community means on [-1, 1]")
+  println(community_means)
 
-  if lfr_kwargs_nt.µ_community_distrib == :equidistributed
-    community_means = collect(range(bounds_01..., length=n_communities))[Random.randperm(n_communities)]
-  elseif lfr_kwargs_nt.μ_community_distrib == :uniform
-    community_means = rand(n_communities) * (bounds_01[2] - bounds_01[1]) .+ bounds_01[1]
-  else
-    @error "unkown value '$(lfr_kwargs_nt.μ_community_distrib)' for parameter µ_community_distrib"
-  end
+  scaled_community_means = scale_to_01.(community_means)
+
+  n_communities = length(unique(c_ids_sorted))
 
   ω_0 = zeros(params.N_micro)
 
   got = 0
 
   for i in 1:n_communities
-    µ = community_means[i]
-    σ² = lfr_kwargs_nt.β_σ²
-    ν = µ * (1 - µ) / σ² - 1
-    local a = µ * ν
-    local b = (1 - µ) * ν
+    μ = scaled_community_means[i]
+    σ² = params.init_lfr_kwargs.β_σ²
+    @show μ, σ² = μ, σ²
+    a, b = beta_μσ²_to_ab(μ, σ²)
+    @show a, b
     beta_dist = Distributions.Beta(a, b)
 
     idc = searchsorted(c_ids_sorted, i)
@@ -412,8 +391,41 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
   end
 
   ω_0 = ω_0[inv_idc_sort]
+end
 
-  return SpA.sparse(g), ω_0, c_ids, scale_from_01.(community_means)
+
+function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
+
+  lfr_kwargs_nt = (; lfr_kwargs...)
+
+  GEN_KEYS = [:is_directed, :nmin, :nmax, :tau, :tau2, :fixed_range, :mixing_parameter,
+    :overlapping_nodes, :overlap_membership, :excess, :defect, :seed, :clustering_coeff]
+
+  lfr_gen_kwargs = filter_nt_fields(in(GEN_KEYS), lfr_kwargs_nt)
+
+  g, c_ids = LFR.lancichinetti_fortunato_radicchi(params.N_micro, lfr_args...; seed=rand(Int32), lfr_gen_kwargs...)
+
+  c_ids_sorted = sort(c_ids)
+  n_communities = length(unique(c_ids_sorted))
+
+  # rescale bounds to [0, 1]
+  bounds = collect(lfr_kwargs_nt.μ_community_bounds)
+  bounds_01 = scale_to_01.(bounds)
+
+  if lfr_kwargs_nt.μ_community_distrib == :equidistributed
+    community_means = collect(range(bounds_01..., length=n_communities))[Random.randperm(n_communities)]
+  elseif lfr_kwargs_nt.μ_community_distrib == :uniform
+    community_means = rand(n_communities) * (bounds_01[2] - bounds_01[1]) .+ bounds_01[1]
+  else
+    @error "unkown value '$(lfr_kwargs_nt.μ_community_distrib)' for parameter μ_community_distrib"
+  end
+
+  println("community means on [0, 1]")
+  println(community_means)
+
+  ω_0 = generate_LFR_ω(params, c_ids, scale_from_01.(community_means))
+
+  return SpA.sparse(g), ω_0, c_ids, community_means
 end
 
 function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbol)
@@ -433,6 +445,9 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       ω_0 = fast_sampling(params.f_init_func, params.N_micro, params.N_sampling)
     elseif params.init_method_omega == :from_lfr
       @assert params.init_method_adj_matrix == :from_lfr "init_method_omega set to :from_ldr but init_method_adj_matrix is not!"
+    elseif params.init_method_omega == :from_lfr_with_ref
+      c_ids, c_expectations = load_lfr_community_data(params.init_lfr_communities_dir)
+      ω_0 = generate_LFR_ω(params, c_ids, c_expectations)
     else
       throw("Unknown value $(params.init_method_omega) for parameter init_method_omega")
     end
@@ -644,16 +659,6 @@ function prepare_directory(store_dir::String, params::NamedTuple, mode::Symbol; 
 
   @info Dates.now()
 
-  try
-    dirty = length(read(`git status -s -uno --porcelain`, String)) > 0
-    if dirty
-      @warn "Working tree is dirty!"
-      @warn read(`git status -uno`, String)
-    end
-  catch
-    @warn "git status failed"
-  end
-
   # TODO: remove this and fix Plotting.jl accordingly
   meta = Dict(
     "julia_version" => string(VERSION),
@@ -663,12 +668,6 @@ function prepare_directory(store_dir::String, params::NamedTuple, mode::Symbol; 
     "N_mfl" => params.N_mfl,
     "N_micro" => params.N_micro
   )
-  try
-    meta["commit"] = read(`git show -s --oneline`, String)
-  catch
-    meta["commit"] = "failed"
-    @warn "git show failed"
-  end
 
   open(joinpath(store_dir, "metadata.toml"), "w") do metafile
     TOML.print(metafile, meta)

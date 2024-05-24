@@ -46,8 +46,6 @@ function build_f_init_func_beta_weighted(; communities::Vector{Int64}, community
   counts = [count(==(i), communities) for i in sort(unique(communities))]
   weights = counts ./ size(communities, 1)
 
-  scale_to_01 = x -> 0.5 * (x + 1)
-
   expectations_01 = if scale_expectations
     scale_to_01.(community_expectations)
   else
@@ -79,8 +77,6 @@ function build_f_init_func_beta_weighted(; communities::Vector{Int64}, community
 end
 
 function build_f_init_func_beta(; n_communities::Int64=3, σ²::Float64=1e-3, expectation_bounds=nothing, side::Symbol=:middle)
-  scale_to_01 = x -> 0.5 * (x + 1)
-
   bounds = if isnothing(expectation_bounds)
     [-0.75; 0.75]
   else
@@ -186,13 +182,14 @@ DEFAULTS = OrderedCollections.OrderedDict(
   ),
   :init_method_omega => (
     type=Symbol,
-    values=[:from_file, :from_sampling_f_init],
+    values=[:from_file, :from_sampling_f_init, :from_lfr, :from_lfr_with_ref],
     default=:from_sampling_f_init,
     desc=md"""
     initialization method for ω (micro model).
     * :from\_file, a HDF5 file should be provided with the `init_micro_filename` parameter. ω is read from the "omega/\$init\_micro\_iter" key. The size of the vector should match `N_micro`.
     * :from\_sampling\_f\_init, ω will be initialized by drawing `N_micro` samples from the function defined in `f_init_func`.
     * :from\_LFR, for each community `c` in the LFR graph, draw the opinion from the beta distribution with expectation `µ_c`, where the community expectation `µ_c` is drawn from [-1, 1]. See `init_lfr_args` for details.
+    * :from\_LFR\_with\_ref, as above but load the LFR community data from the directory pointed by `init_lfr_communities_dir`.
     """
   ),
   :init_method_adj_matrix => (

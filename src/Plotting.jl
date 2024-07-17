@@ -444,14 +444,15 @@ function plot_results_no_g(; output_filename::String="",
   @assert all(isdir, meanfield_dirs)
   @assert all(isdir, micro_dirs)
 
-  has_mfl, has_d = length(meanfield_dirs) > 0, length(micro_dirs) > 0
-
-  K_mfl = length(meanfield_dirs)
+  K_mfl, K_d = length(meanfield_dirs), length(micro_dirs)
+  has_mfl, has_d = K_mfl > 0, K_d > 0
 
   if !(has_mfl || has_d)
     @error "No dir provided"
     return
   end
+
+  center_micro = get(kwargs, :center_micro, false)
 
   obs_i = M.Observable(1)
   obs_iter = M.Observable(0)
@@ -461,11 +462,16 @@ function plot_results_no_g(; output_filename::String="",
     i_mfl_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), meanfield_dirs)
     i_mfl = i_mfl_a[1]
     f_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "f"), meanfield_dirs)
+    g_init_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "g_init"), meanfield_dirs)
     f_avg = sum(f_a) / length(f_a)
-    f_avg = f_a[1]
     N_mfl = size(f_avg, 1)
 
     x = map(build_x, N_mfl)
+
+    ω_inf_cont = (g) -> sum(x .* g) / sum(g)
+
+    ω_inf_cont_a = map(ω_inf_cont, g_init_a)
+    ω_inf_cont_avg = reduce(+, ω_inf_cont_a) / K_mfl
   end
 
   if has_d
@@ -473,13 +479,26 @@ function plot_results_no_g(; output_filename::String="",
     ω_concat = vcat(ω_a...)
     i_d = load_hdf5_data(joinpath(micro_dirs[1], "data.hdf5"), "i")
     params_d = Params.from_toml(micro_dirs[1])
+    adj_matrix = load_hdf5_sparse(joinpath(micro_dirs[1], "data.hdf5"), "adj_matrix")
+
+    neighbors = vec(sum(adj_matrix; dims=1))
+    ω_inf_micro = (ω) -> sum(ω .* neighbors) ./ sum(neighbors)
+
+    ω_inf_micro_a = map(ω_inf_micro, ω_a)
+    ω_centered_a = [ω_a[i] .- (ω_inf_cont_avg - ω_inf_micro_a[i]) / params_d.N_micro for i in 1:K_d]
+
+    ω_concat = vcat(ω_a...)
+    ω_centered_concat = vcat(ω_centered_a...)
   end
 
   obs_ω = M.@lift ω_concat[:, $obs_i]
+  obs_ω_centered = M.@lift ω_centered_concat[:, $obs_i]
 
   fig = M.Figure(size=(1920, 1080))
   ax1 = M.Axis(fig[1, 1])
   ax1.title = "f / ω_i (ensemble averages)"
+
+  M.vlines!(ax1, ω_inf_cont_avg, color=:black)
 
   if has_mfl
     obs_f_avg = M.@lift f_avg[:, $obs_i]
@@ -515,6 +534,9 @@ function plot_results_no_g(; output_filename::String="",
   if has_d
 
     M.hist!(ax1, obs_ω; bins=2 * N_mfl, normalization=:pdf)
+    if center_micro
+      M.hist!(ax1, obs_ω_centered; bins=2 * N_mfl, normalization=:pdf, color=:black)
+    end
 
   end
 
@@ -559,7 +581,12 @@ function plot_results_no_g(; output_filename::String="",
   dirs = vcat(meanfield_dirs, micro_dirs)
   prefix = longest_prefix(dirs, existing_dir=true)
 
-  effective_output_filename = "$prefix/movie_without_g.mp4"
+
+  effective_output_filename = if center_micro
+    "$prefix/movie_without_g_centered.mp4"
+  else
+    "$prefix/movie_without_g.mp4"
+  end
 
   M.record(step_i, fig, effective_output_filename, i_range, framerate=3)
   @info ("movie saved at $effective_output_filename")

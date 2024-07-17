@@ -21,6 +21,8 @@ module Params
 
 export get_default_params, DEFAULTS, build_f_init_func_beta, build_f_init_func_beta_weighted
 
+import OpiForm: scale_to_01, scale_from_01
+
 import OrderedCollections
 import Markdown: @md_str
 
@@ -345,6 +347,13 @@ DEFAULTS = OrderedCollections.OrderedDict(
     desc=md"""
     If positive, require the LFR graph to have this number of communities.
     If no admissible graph has been generated after `init_lfr_max_tries`, throws ErrorException.
+    """
+  ),
+  :init_lfr_communities_dir => (
+    type=String,
+    default="",
+    desc=md"""
+    Directory where `c_ids.csv` and `c_expectations.csv` file are located, for use with the `init_method_omega = :from_lfr_with_ref` option.
     """
   ),
   :f_init_func => (

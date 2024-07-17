@@ -355,14 +355,10 @@ else
 end
 
 function generate_LFR_ω(params::NamedTuple, c_ids, community_means)
-  println("Entering generate_LFR_ω")
 
   idc_sort = sortperm(c_ids)
   inv_idc_sort = invperm(idc_sort)
   c_ids_sorted = c_ids[idc_sort]
-
-  println("community means on [-1, 1]")
-  println(community_means)
 
   scaled_community_means = scale_to_01.(community_means)
 
@@ -375,9 +371,7 @@ function generate_LFR_ω(params::NamedTuple, c_ids, community_means)
   for i in 1:n_communities
     μ = scaled_community_means[i]
     σ² = params.init_lfr_kwargs.β_σ²
-    @show μ, σ² = μ, σ²
     a, b = beta_μσ²_to_ab(μ, σ²)
-    @show a, b
     beta_dist = Distributions.Beta(a, b)
 
     idc = searchsorted(c_ids_sorted, i)
@@ -410,20 +404,16 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
 
   # rescale bounds to [0, 1]
   bounds = collect(lfr_kwargs_nt.μ_community_bounds)
-  bounds_01 = scale_to_01.(bounds)
 
   if lfr_kwargs_nt.μ_community_distrib == :equidistributed
-    community_means = collect(range(bounds_01..., length=n_communities))[Random.randperm(n_communities)]
+    community_means = collect(range(bounds..., length=n_communities))[Random.randperm(n_communities)]
   elseif lfr_kwargs_nt.μ_community_distrib == :uniform
-    community_means = rand(n_communities) * (bounds_01[2] - bounds_01[1]) .+ bounds_01[1]
+    community_means = rand(n_communities) * (bounds[2] - bounds[1]) .+ bounds[1]
   else
     @error "unkown value '$(lfr_kwargs_nt.μ_community_distrib)' for parameter μ_community_distrib"
   end
 
-  println("community means on [0, 1]")
-  println(community_means)
-
-  ω_0 = generate_LFR_ω(params, c_ids, scale_from_01.(community_means))
+  ω_0 = generate_LFR_ω(params, c_ids, community_means)
 
   return SpA.sparse(g), ω_0, c_ids, community_means
 end

@@ -48,24 +48,26 @@ function minmod(a, b)
 end
 
 function compute_df!(dst, params::NamedTuple, f, a, a_prime)
-  f_l = @left f
-  f_r = @right f
-  a_l = @left a
-  a_r = @right a
+  n_groups = size(f, 2)
+
+  f_l = SA.shiftedarray(f, (1, 0), 0.0)
+  f_r = SA.shiftedarray(f, (-1, 0), 0.0)
+  a_l = SA.shiftedarray(a, (1, 0), 0.0)
+  a_r = SA.shiftedarray(a, (-1, 0), 0.0)
 
   if params.approx_a_prime
-    a_prime_l = @left a_prime
-    a_prime_r = @right a_prime
+    a_prime_l = SA.shiftedarray(a_prime, (1, 0), 0.0)
+    a_prime_r = SA.shiftedarray(a_prime, (-1, 0), 0.0)
   end
 
   if params.flux == :lLF
-    # local Lax-Fridiredrich
+    # local Lax-Fridriedrich
     if params.approx_a_prime
-      max_C_l = maximum(abs, [a + a_prime .* f a_l + a_prime_l .* f_l], dims=2)
-      max_C_r = maximum(abs, [a + a_prime .* f a_r + a_prime_r .* f_r], dims=2)
+      max_C_l = maximum(abs, reshape([a + a_prime .* f a_l + a_prime_l .* f_l], (params.Nf, n_groups, 2)), dims=3)
+      max_C_r = maximum(abs, reshape([a + a_prime .* f a_r + a_prime_r .* f_r], (params.Nf, n_groups, 2)), dims=3)
     else
-      max_C_l = maximum(abs, [a a_l], dims=2)
-      max_C_r = maximum(abs, [a a_r], dims=2)
+      max_C_l = maximum(abs, reshape([a a_l], (params.Nf, n_groups, 2)), dims=3)
+      max_C_r = maximum(abs, reshape([a a_r], (params.Nf, n_groups, 2)), dims=3)
     end
 
     if params.CFL_violation != :ignore
@@ -85,21 +87,25 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
     flux_r = 0.5 * (f_r .* a_r .+ f .* a .- params.LF_relaxation * max_C_r .* (f_r .- f))
   elseif params.flux == :LF
     # Lax-Friedrich
+    throw("Not implemented")
     max_C = maximum(abs, a + a_prime .* f)
     flux_l = 0.5 * (f_l .* a_l .+ f .* a .- params.LF_relaxation * max_C * (f .- f_l))
     flux_r = 0.5 * (f_r .* a_r .+ f .* a .- params.LF_relaxation * max_C * (f_r .- f))
   elseif params.flux == :LW_Richtmyer
     # Richtmyer
+    throw("Not implemented")
     flux_l = 0.5 * a .* ((f .+ f_l) .- params.δt / params.δx * (f .* a .- f_l .* a_l))
     flux_r = 0.5 * a .* ((f_r .+ f) .- params.δt / params.δx * (f_r .* a_r .- f .* a))
   elseif params.flux == :upwind
     # upwind
+    throw("Not implemented")
     flux_l = ((f_l .< f) .* min.(a .* f, a_l .* f_l) .+
               (f_l .>= f) .* max.(a .* f, a_l .* f_l))
     flux_r = ((f .< f_r) .* min.(a_r .* f_r, a .* f) .+
               (f .>= f_r) .* max.(a_r .* f_r, a .* f))
   elseif params.flux == :constant_godunov
     # wave speed
+    throw("Not implemented")
     s_l = (f .* a .- f_l .* a_l) ./ (f .- f_l)
     s_r = (f_r .* a_r .- f .* a) ./ (f_r .- f)
 
@@ -113,9 +119,9 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
 
   elseif params.flux == :godunov
     # godunov
+    throw("Not implemented")
 
     if params.godunov_entropy_fix
-      throw("not implemented")
       transonic_l = f_l .< 0 .< f
       transonic_r = f .< 0 .< f_r
 
@@ -131,6 +137,7 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
                 (f .>= f_r) .* max.(a_r .* f_r, a .* f))
     end
   elseif params.flux == :KT # (Kurganov-Tadmor)
+    throw("not implemented")
     λ = params.δt / params.δx
     (α_l, α_r) = max.(abs.(a), abs.(a_l)), max.(abs.(a), abs.(a_r))
     α_lll = @left α_l
@@ -207,8 +214,8 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
   end
 
   # Neumann boundary conditions
-  flux_l[1] = 0
-  flux_r[end] = 0
+  flux_l[1,:] = 0
+  flux_r[end,:] = 0
 
   dst .= flux_r - flux_l
 end
@@ -216,15 +223,17 @@ end
 function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
   # Exact same computation as for f but along both dimensions.
   # There is probably a way to take advantage of the symmetry of g.
-  g_lω, g_rω = SA.shiftedarray(g, (1, 0), 0.0), SA.shiftedarray(g, (-1, 0), 0.0)
-  g_lm, g_rm = SA.shiftedarray(g, (0, 1), 0.0), SA.shiftedarray(g, (0, -1), 0.0)
+  n_groups = size(g, 3)
 
-  a_l = @left a
-  a_r = @right a
+  g_lω, g_rω = SA.shiftedarray(g, (1, 0, 0, 0), 0.0), SA.shiftedarray(g, (-1, 0, 0, 0), 0.0)
+  g_lm, g_rm = SA.shiftedarray(g, (0, 1, 0, 0), 0.0), SA.shiftedarray(g, (0, -1, 0, 0), 0.0)
+
+  a_l = SA.shiftedarray(a, (1, 0), 0.0)
+  a_r = SA.shiftedarray(a, (-1, 0), 0.0)
 
   if params.approx_a_prime
-    a_prime_l = @left a_prime
-    a_prime_r = @right a_prime
+    a_prime_l = SA.shiftedarray(a_prime, (1, 0), 0.0)
+    a_prime_r = SA.shiftedarray(a_prime, (-1, 0), 0.0)
   end
 
   # Lax-Friedrich flux
@@ -245,17 +254,28 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
         ], dims=2)
 
     else
-      max_C_l = maximum(abs, [a a_l], dims=2)
-      max_C_r = maximum(abs, [a a_r], dims=2)
+      max_C_l = reshape(maximum(abs, reshape([a a_l], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, 1, n_groups))
+      max_C_r = reshape(maximum(abs, reshape([a a_r], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, 1, n_groups))
     end
 
-    # Lax-Friedrich flux
-    flux_lω = 0.5 * (g_lω .* a_l .+ g .* a .- params.LF_relaxation * max_C_l .* (g .- g_lω))
-    flux_rω = 0.5 * (g_rω .* a_r .+ g .* a .- params.LF_relaxation * max_C_r .* (g_rω .- g))
+    flux_lω = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
+    flux_rω = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
+    flux_lm = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
+    flux_rm = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
 
-    flux_lm = 0.5 * (g_lm .* a_l' .+ g .* a' .- params.LF_relaxation * max_C_l' .* (g .- g_lm))
-    flux_rm = 0.5 * (g_rm .* a_r' .+ g .* a' .- params.LF_relaxation * max_C_r' .* (g_rm .- g))
+    for p = 1:n_groups
+      for q = 1:n_groups
+        # Lax-Friedrich flux
+        flux_lω[:,:,p,q] = 0.5 * (g_lω[:,:,p,q] .* a_l[:,p] .+ g[:,:,p,q] .* a[:,p] .- params.LF_relaxation * max_C_l[:,p] .* (g[:,:,p,q] .- g_lω[:,:,p,q]))
+        flux_rω[:,:,p,q] = 0.5 * (g_rω[:,:,p,q] .* a_r[:,p] .+ g[:,:,p,q] .* a[:,p] .- params.LF_relaxation * max_C_r[:,p] .* (g_rω[:,:,p,q] .- g[:,:,p,q]))
+
+        flux_lm[:,:,p,q] = 0.5 * (g_lm[:,:,p,q] .* a_l[:,q]' .+ g[:,:,p,q] .* a[:,q]' .- params.LF_relaxation * max_C_l[:,q] .* (g[:,:,p,q] .- g_lm[:,:,p,q]))
+        flux_rm[:,:,p,q] = 0.5 * (g_rm[:,:,p,q] .* a_r[:,q]' .+ g[:,:,p,q] .* a[:,q]' .- params.LF_relaxation * max_C_r[:,q] .* (g_rm[:,:,p,q] .- g[:,:,p,q]))
+      end
+    end
+
   elseif params.flux == :LF
+    throw("not implemented")
     max_C = maximum(abs, a)
 
     # Lax-Friedrich flux
@@ -265,6 +285,7 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
     flux_lm = 0.5 * (g_lm .* a_l' .+ g .* a' .- params.LF_relaxation * max_C .* (g .- g_lm))
     flux_rm = 0.5 * (g_rm .* a_r' .+ g .* a' .- params.LF_relaxation * max_C .* (g_rm .- g))
   elseif params.flux == :LW_Richtmyer
+    throw("not implemented")
     # Richtmyer
     flux_lω = 0.5 * g .* ((g .+ g_lω) .- params.δt / params.δx * (g_lω .* a_l .- g .* a))
     flux_rω = 0.5 * g .* ((g_rω .+ g) .- params.δt / params.δx * (g_rω .* a_r .- g .* a))
@@ -272,6 +293,7 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
     flux_lm = 0.5 * g .* ((g .+ g_lm) .- params.δt / params.δx * (g_lm .* a_l' .- g .* a'))
     flux_rm = 0.5 * g .* ((g_rm .+ g) .- params.δt / params.δx * (g_rm .* a_r' .- g .* a'))
   elseif params.flux == :KT
+    throw("not implemented")
     λ = params.δt / params.δx
 
     (α_l, α_r) = max.(abs.(a), abs.(a_l)), max.(abs.(a), abs.(a_r))
@@ -384,6 +406,7 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
 
 
   # Neumann boundary conditions
+  # FIXME INDICES
   flux_lω[1] = 0
   flux_rω[end] = 0
 
@@ -406,13 +429,13 @@ function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, 
     # η(ω,m) = 1 / params.Ω_width
     η = 1 / (params.Ω_width)
   else
-    g_mass = params.δx * sum(g; dims=2)
+    g_mass = params.δx * sum(g; dims=(2,4))
     g_mass_inv = 1 ./ g_mass
     g_mass_inv[g_mass_inv.>1/params.int_threshold] .= 0
     η = g .* g_mass_inv
   end
 
-  EB = params.δx * sum(η .* params.D_matrix; dims=2)
+  EB = reshape(params.δx * sum(η .* params.D_matrix; dims=(2,4)), (params.N_mfl, n_groups))
 
   # Check the normalization.
   # Original model: chamber_size = 1
@@ -555,7 +578,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     int_threshold=int_threshold,
   ))
 
+  # FIXME:
   f_init = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "f_init")
+  n_groups = size(f, 2)
   f = copy(f_init)
   if !params.constant_g
     g = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "g_init")
@@ -565,6 +590,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
 
   i = 0
 
+  # FIXME: remove
   α = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "alpha")
   if params.f_dependent_g
     @assert !isnothing(α) "α is Nothing, but f_dependent_g is set!"
@@ -579,6 +605,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     if params.store_g
       store_g = [(0, copy(g))]
     end
+    # FIXME:
     f_stats = compute_f_stats(f, g, x)
     store_g_M1_n = [f_stats.g_M1_n]
     store_f_var = [f_stats.f_var]
@@ -587,8 +614,8 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   # Initial mass
   mass_init = δx * sum(f)
 
-  a = zeros(params.N_mfl)
-  a_prime = zeros(params.N_mfl)
+  a = zeros(params.N_mfl, n_groups)
+  a_prime = zeros(params.N_mfl, n_groups)
   µ, µC = zeros(params.N_mfl), zeros(params.N_mfl)
 
   df = zeros(params.N_mfl)
@@ -764,7 +791,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
 
   @info "Saving data to disk @ $(store_dir)"
   store_pairs = vcat(
-    ["i" => store_i, "f" => hcat(store_f...)],
+    ["i" => store_i, "f" => cat(store_f...; dims=3)],
   )
   if !params.constant_g
     append!(store_pairs,

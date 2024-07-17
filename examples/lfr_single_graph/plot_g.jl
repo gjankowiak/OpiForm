@@ -1,7 +1,7 @@
 import OpiForm
 
 function create_g_plots()
-  base_dir = get(ARGS, 1, "results/LFR/N_micro=1000,N_mfl=301/")
+  base_dir = get(ARGS, 1, "results/LFR_single_graph/N_micro=1000,N_mfl=301/")
 
   @info "Using base directory $(base_dir)"
 

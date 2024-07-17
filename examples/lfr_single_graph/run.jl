@@ -1,5 +1,4 @@
 using Distributed
-import REPL.TerminalMenus as TM
 
 @everywhere import OpiForm
 @everywhere import DelimitedFiles
@@ -24,11 +23,11 @@ function main()
   end
 
   @everywhere function get_micro_params(μ, β_σ²)
-    k_mean = 15
-    k_max = 40
+    k_mean = 15 # mean degree
+    k_max = 40  # maximum degree
 
-    nmin = div(N_micro, 5)
-    nmax = div(N_micro, 3)
+    nmin = div(N_micro, 5) # min community size
+    nmax = div(N_micro, 3) # max community size
 
     c_mean_padding = 0.25
     expectation_bounds = (-1 + c_mean_padding, 1 - c_mean_padding)
@@ -90,7 +89,7 @@ function main()
     # end
 
     reference_dir = params.init_lfr_communities_dir
-    c_ids, c_expectations = load_lfr_community_data(reference_dir)
+    c_ids, c_expectations = OpiForm.load_lfr_community_data(reference_dir)
 
     # Run the meanfield model using the initial data and graph of the micro model (with KDE)
     store_dir_mfl = "results/$(prefix)/meanfield-$(run_id)"
@@ -127,14 +126,17 @@ function main()
   pmap(generate_reference, μs)
   pmap(f, Iterators.product(1:n_runs, μs, β_σ²s))
 
+  @info "Computations done"
+
+  return
+
   # Postprocessing
 
-  include("./comparison.jl")
-  include("./plot_g.jl")
+  @everywhere include("./comparison.jl")
+  @everywhere include("./plot_g.jl")
 
   perform_comparison()
   create_g_plots()
-
 
   options = ["no", "yes"]
   menu = TM.RadioMenu(options)

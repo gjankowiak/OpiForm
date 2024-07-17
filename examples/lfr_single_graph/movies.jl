@@ -2,12 +2,12 @@ import OpiForm
 
 function create_movies()
 
-  µs = [1e-3; 5e-3; 1e-2; range(0.05, 1.0, 7)]
-  β_σ²s = [0.001; 0.002; 0.004; 0.012]
+  μs = [1e-3; 5e-3; 1e-2; 5e-2; 5e-1]
+  β_σ²s = [0.001; 0.004; 0.012]
 
   for β_σ² in β_σ²s
     for µ in µs
-      base_dir = "results/LFR/N_micro=1000,N_mfl=301/σ²=$β_σ²/μ=$µ/"
+      base_dir = "results/LFR_single_graph/N_micro=1000,N_mfl=301/σ²=$β_σ²/μ=$µ/"
 
       @info "Using base directory $(base_dir)"
 
@@ -37,6 +37,13 @@ function create_movies()
         meanfield_dirs=mfl_dirs,
         micro_dirs=micro_dirs,
         stride=1,
+      )
+
+      OpiForm.plot_results_no_g(;
+        meanfield_dirs=mfl_dirs,
+        micro_dirs=micro_dirs,
+        stride=1,
+        center_micro=true
       )
     end
   end

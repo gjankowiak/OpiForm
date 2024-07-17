@@ -11,10 +11,10 @@ end
 
 function perform_comparison()
 
-  β_σ²s = [0.001; 0.002; 0.004; 0.012]
+  β_σ²s = [0.001; 0.004; 0.012]
 
   for β_σ² in β_σ²s
-    base_dir = "results/LFR/N_micro=1000,N_mfl=301/σ²=$β_σ²/"
+    base_dir = "results/LFR_single_graph/N_micro=1000,N_mfl=301/σ²=$β_σ²/"
 
     @info "Using base directory $(base_dir)"
 

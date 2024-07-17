@@ -16,7 +16,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 function get_ωx_ωy!(ωx::Vector{Float64}, ωy::Vector{Float64}, adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64})
   N = length(ω)
   rows = SpA.rowvals(adj_matrix)
@@ -27,6 +26,26 @@ function get_ωx_ωy!(ωx::Vector{Float64}, ωy::Vector{Float64}, adj_matrix::Sp
 
     ωx[got+1:got+nnz_in_col] .= ω[rows[nzr]]
     ωy[got+1:got+nnz_in_col] .= ω[j]
+
+    got += nnz_in_col
+  end
+end
+
+function get_ωx_ωy!(ωx::Array{Float64}, ωy::Array{Float64}, adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
+  N_p = length(ω)
+  rows = SpA.rowvals(adj_matrix)
+  got = 0
+  for j in 1:N_p
+    nzr = SpA.nzrange(adj_matrix, j)
+    nnz_in_col = length(nzr)
+
+    for r in rows[nzr]
+      p = group_labels[r]
+      q = group_labels[j]
+
+      ωx[got+1:got+nnz_in_col,p] .= ω[r]
+      ωy[got+1:got+nnz_in_col,q] .= ω[j]
+    end
 
     got += nnz_in_col
   end
@@ -44,6 +63,14 @@ function get_ωx_ωy(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Fl
   return ωx, ωy
 end
 
+function get_ωx_ωy(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
+  nnz = SpA.nnz(adj_matrix)
+  n_groups = length(unique(group_labels))
+  ωx, ωy = zeros(nnz,n_groups), zeros(nnz,n_groups)
+  get_ωx_ωy!(ωx, ωy, adj_matrix, ω, group_labels)
+  return ωx, ωy
+end
+
 function to_graph(adj_matrix::SpA.SparseMatrixCSC)
   return Graphs.SimpleGraphs.SimpleGraph(adj_matrix)
 end
@@ -52,21 +79,40 @@ function to_adj_matrix(g::Graphs.SimpleGraphs.SimpleGraph)
   return SpA.sparse(g)
 end
 
-function compute_kde(x, ops::Vector{Float64})
+function compute_kde(x, ops::Vector{Float64}, group_labels::Vector{Int64})
   h_SJ = KernelDensitySJ.bwsj(ops)
-  kde_ops = KernelDensity.kde(ops, boundary=(-1, 1), bandwidth=h_SJ)
-  interp_kde_ops = KernelDensity.InterpKDE(kde_ops)
-  return KernelDensity.pdf(interp_kde_ops, x)
+  unique_labels = unique(group_labels)
+  n_groups = length(unique_labels)
+  interp_kde_ops = zeros(length(x), n_groups)
+  for p in unique_labels
+    group_ops = map(t -> t[2], filter(args -> group_labels[args[1]] == p, collect(enumerate(ops))))
+    kde_ops = KernelDensity.kde(ops, boundary=(-1, 1), bandwidth=h_SJ)
+    interp_kde_ops[:,p] = length(group_ops) / length(ops) * KernelDensity.pdf(KernelDensity.InterpKDE(kde_ops), x)
+  end
+  return interp_kde_ops
 end
 
-function compute_kde(x, adj_matrix::SpA.SparseMatrixCSC, ops::Vector{Float64})
+function compute_kde(x, adj_matrix::SpA.SparseMatrixCSC, ops::Vector{Float64}, group_labels::Vector{Int64})
   h_SJ = KernelDensitySJ.bwsj(ops)
-  ωx, ωy = get_ωx_ωy(adj_matrix, ops)
 
-  kde_a = KernelDensity.kde([ωx ωy], boundary=((-1, 1), (-1, 1)), bandwidth=(h_SJ, h_SJ))
-  interp_kde_a = KernelDensity.InterpKDE(kde_a)
+  unique_labels = unique(group_labels)
+  n_groups = length(unique_labels)
 
-  return [KernelDensity.pdf(interp_kde_a, _x, _y) for _x in x, _y in x]
+  group_sizes = map(length, [filter(==(k), group_labels) for k in unique_labels])
+
+  interp_kde_a = zeros(length(x), length(x), n_groups, n_groups)
+
+  ωx, ωy = get_ωx_ωy(adj_matrix, ops, group_labels)
+
+  for p in unique_labels
+    for q in unique_labels
+      kde_a = KernelDensity.kde([ωx[:,p] ωy[:,q]], boundary=((-1, 1), (-1, 1)), bandwidth=(h_SJ, h_SJ))
+      interp = KernelDensity.InterpKDE(kde_a)
+      interp_kde_a[:,:,p,q] = group_sizes[p]*group_sizes[q]/length(ops) * [KernelDensity.pdf(interp, _x, _y) for _x in x, _y in x]
+    end
+  end
+
+  return interp_kde_a
 end
 
 function scale_poly(poly::Polynomials.AbstractPolynomial)
@@ -561,6 +607,13 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
     #GLMakie.activate!()
   end
   if mode == :mfl
+    # FIXME: make this cleaner ???
+    try
+      @show params.init_lfr_communities_dir
+      c_ids, _ = load_lfr_community_data(params.init_lfr_communities_dir)
+    catch
+      c_ids = []
+    end
     x = build_x(params.N_mfl)
     δx = x[2] - x[1]
     if params.init_method_f == :from_file
@@ -575,7 +628,7 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       f_0 ./= f_0_integral
     elseif params.init_method_f == :from_kde_omega
       # Compute KDE
-      f_0 = compute_kde(x, ω_0)
+      f_0 = compute_kde(x, ω_0, c_ids)
     else
       throw("Unknown value $(params.init_method_f) for parameter init_method_f")
     end
@@ -596,7 +649,7 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
     elseif params.init_method_g == :from_kde_adj_matrix
       @assert !isnothing(adj_matrix) "The adjacency matrix is Nothing. I don't know how to perform a KDE if full_adj_matrix is set."
       # Compute KDE
-      g_0 = compute_kde(x, adj_matrix, ω_0)
+      g_0 = compute_kde(x, adj_matrix, ω_0, c_ids)
       α = nothing
     else
       throw("Unknown value $(params.init_method_g) for parameter init_method_g")

@@ -63,11 +63,11 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
   if params.flux == :lLF
     # local Lax-Fridriedrich
     if params.approx_a_prime
-      max_C_l = maximum(abs, reshape([a + a_prime .* f a_l + a_prime_l .* f_l], (params.Nf, n_groups, 2)), dims=3)
-      max_C_r = maximum(abs, reshape([a + a_prime .* f a_r + a_prime_r .* f_r], (params.Nf, n_groups, 2)), dims=3)
+      max_C_l = maximum(abs, reshape([a + a_prime .* f a_l + a_prime_l .* f_l], (params.N_mfl, n_groups, 2)), dims=3)
+      max_C_r = maximum(abs, reshape([a + a_prime .* f a_r + a_prime_r .* f_r], (params.N_mfl, n_groups, 2)), dims=3)
     else
-      max_C_l = maximum(abs, reshape([a a_l], (params.Nf, n_groups, 2)), dims=3)
-      max_C_r = maximum(abs, reshape([a a_r], (params.Nf, n_groups, 2)), dims=3)
+      max_C_l = reshape(maximum(abs, reshape([a a_l], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, n_groups))
+      max_C_r = reshape(maximum(abs, reshape([a a_r], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, n_groups))
     end
 
     if params.CFL_violation != :ignore
@@ -214,8 +214,8 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
   end
 
   # Neumann boundary conditions
-  flux_l[1,:] = 0
-  flux_r[end,:] = 0
+  flux_l[1,:] .= 0
+  flux_r[end,:] .= 0
 
   dst .= flux_r - flux_l
 end
@@ -254,8 +254,8 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
         ], dims=2)
 
     else
-      max_C_l = reshape(maximum(abs, reshape([a a_l], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, 1, n_groups))
-      max_C_r = reshape(maximum(abs, reshape([a a_r], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, 1, n_groups))
+      max_C_l = reshape(maximum(abs, reshape([a a_l], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, n_groups))
+      max_C_r = reshape(maximum(abs, reshape([a a_r], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, n_groups))
     end
 
     flux_lω = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
@@ -419,6 +419,7 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
 end
 
 function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, g)
+  n_groups = size(f, 2)
   # compute EB
   #
   # g is normalized so that ∫∫g = connection_density*N_micro
@@ -443,40 +444,7 @@ function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, 
 
   # compute EC
   if params.σ < 1
-    if params.normalize_chambers
-      chamber_size = params.δx * sum(params.EC_mask_matrix; dims=2)
-    else
-      chamber_size = 1.0
-    end
-    chamber_mass = params.δx * sum(f' .* params.EC_mask_matrix; dims=2) ./ chamber_size
-    chamber_mass_inv = 1 ./ chamber_mass
-    chamber_mass_inv[chamber_mass_inv.>1/params.int_threshold] .= 0.0
-    # p = chamber_mass_inv' .* f .* params.EC_mask_matrix
-    p = chamber_mass_inv .* f .* params.EC_mask_matrix
-    µ = params.δx * sum(params.x' .* p; dims=2) ./ chamber_size
-    µ_dst .= µ
-
-    if params.normalize_chambers
-      chamberC_size = params.δx * sum((1 .- params.EC_mask_matrix); dims=2)
-    else
-      chamberC_size = 1.0
-    end
-    chamberC_mass = params.δx * sum(f' .* (1 .- params.EC_mask_matrix); dims=2) ./ chamberC_size
-    chamberC_mass_inv = 1 ./ chamber_mass
-    chamberC_mass_inv[chamberC_mass_inv.>1/params.int_threshold] .= 0.0
-    pC = chamberC_mass_inv .* f .* (1 .- params.EC_mask_matrix)
-    µC = params.δx * sum(params.x' .* pC; dims=2) ./ chamberC_size
-    µC_dst .= µC
-
-    EC_in = params.R_func.(params.x .- µ)
-    EC_out = params.P_func.(µ .- μC)
-
-    a_dst .= params.σ .* EB .+ (1 - params.σ) * (
-      chamber_mass .* EC_in .+ chamberC_mass .* EC_out
-    )
-    if params.approx_a_prime
-      a_prime_dst .= (1 - params.σ) * params.δx .* (EC_in ./ chamber_size .+ EC_out ./ chamberC_size)
-    end
+    throw("not implemented")
   else
     a_dst .= EB
     if params.approx_a_prime
@@ -526,33 +494,6 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   # Echo chamber mask matrix
   if params_in.σ == 1
     EC_mask_matrix = nothing
-  elseif params_in.EC_type == :characteristic
-    EC_idx_span = Int(floor(min(N_mfl - 1, params_in.EC_ρ / δx)))
-    EC_mask_matrix = SpA.spdiagm([i => ones(N_mfl - abs(i)) for i in -EC_idx_span:EC_idx_span]...)
-  elseif params_in.EC_type == :super_gaussian
-    if N_mfl % 2 != 1
-      @warn("Using super gaussian echo chamber with even N_mfl, this breaks symmetry")
-    end
-    # define the mask matrix
-    EC_mask_matrix_full = zeros(N_mfl, N_mfl)
-
-    # compute the full mask centered at 0
-    EC_mask = clip.(exp.(-(x .^ 2 / params_in.EC_ρ^2) .^ params_in.EC_power), params_in.EC_clip_value)
-
-    # fill the matrix rowwise by shifting EC_mask
-    EC_mask_shift = div(N_mfl, 2) + 1
-    for i in 1:N_mfl
-      EC_mask_matrix_full[i, max(1, i + 1 - EC_mask_shift):min(N_mfl, i + N_mfl - EC_mask_shift)] =
-        EC_mask[max(1, EC_mask_shift - (i - 1)):min(N_mfl, N_mfl + EC_mask_shift - i)]
-    end
-
-    use_sparse = sum(iszero, EC_mask) < 0.5 * (N_mfl - 1)
-    if use_sparse
-      EC_mask_matrix = SpA.sparse(EC_mask_matrix_full)
-    else
-      @warn "Echo chamber matrix (EC_mask_matrix) is not sparse"
-      EC_mask_matrix = EC_mask_matrix_full
-    end
   else
     throw("Unknown EC_type '$(params_in.EC_type)'")
   end
@@ -580,7 +521,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
 
   # FIXME:
   f_init = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "f_init")
-  n_groups = size(f, 2)
+  n_groups = size(f_init, 2)
   f = copy(f_init)
   if !params.constant_g
     g = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "g_init")
@@ -606,9 +547,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       store_g = [(0, copy(g))]
     end
     # FIXME:
-    f_stats = compute_f_stats(f, g, x)
-    store_g_M1_n = [f_stats.g_M1_n]
-    store_f_var = [f_stats.f_var]
+    # f_stats = compute_f_stats(f, g, x)
+    # store_g_M1_n = [f_stats.g_M1_n]
+    # store_f_var = [f_stats.f_var]
   end
 
   # Initial mass
@@ -618,20 +559,13 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   a_prime = zeros(params.N_mfl, n_groups)
   µ, µC = zeros(params.N_mfl), zeros(params.N_mfl)
 
-  df = zeros(params.N_mfl)
+  df = zeros(params.N_mfl, n_groups)
   if !params.constant_g
-    dg = zeros(params.N_mfl, params.N_mfl)
+    dg = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
   end
 
   compute_a!(a, a_prime, µ, µC, params, f, g)
   a_init = copy(a)
-
-  if params.time_stepping == :RK4
-    RK4_f = zeros(params.N_mfl, 4)
-    RK4_df = zeros(params.N_mfl, 4)
-    RK4_g = zeros(params.N_mfl, params.N_mfl, 4)
-    RK4_dg = zeros(params.N_mfl, params.N_mfl, 4)
-  end
 
   ## Print parameters and plot initial conditions before starting
 
@@ -688,85 +622,6 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
           end
         end
       end
-    elseif params.time_stepping == :RK4
-      if params.f_dependent_f
-        throw("not implemented")
-      end
-      # Stage 1
-      stage = 1
-
-      if params.constant_a
-        fill!(a, 1.0)
-        fill!(a_prime, 0.0)
-      else
-        compute_a!(a, a_prime, µ, µC, params, f, g)
-      end
-
-      compute_df!(view(RK4_df, :, stage), params, f, a, a_prime)
-      if !params.constant_g
-        compute_dg!(view(RK4_dg, :, stage), params, g, a, a_prime)
-      end
-
-      RK4_f[:, stage] .= f .- 0.5 .* mfl_λ * params.δt ./ params.δx .* RK4_df[:, stage]
-      if !params.constant_g
-        RK4_g[:, :, stage] .= g .- 0.5 .* mfl_λ * params.δt ./ params.δx .* RK4_dg[:, :, stage]
-      end
-
-      # Stage 2
-      stage = 2
-
-      if !params.constant_a
-        compute_a!(a, a_prime, µ, µC, params, RK4_f[:, stage-1], RK4_g[:, :, stage-1])
-      end
-
-      compute_df!(view(RK4_df, :, stage), params, RK4_f[:, stage-1], a, a_prime)
-      if !params.constant_g
-        compute_dg!(view(RK4_dg, :, stage), params, RK4_g[:, :, stage-1], a, a_prime)
-      end
-
-      RK4_f[:, stage] .= f .- 0.5 .* mfl_λ * params.δt ./ params.δx .* RK4_df[:, stage]
-      if !params.constant_g
-        RK4_g[:, :, stage] .= g .- 0.5 .* mfl_λ * params.δt ./ params.δx .* RK4_dg[:, :, stage]
-      end
-
-      # Stage 3
-      stage = 3
-
-      if !params.constant_a
-        compute_a!(a, a_prime, µ, µC, params, RK4_f[:, stage-1], RK4_g[:, :, stage-1])
-      end
-
-      compute_df!(view(RK4_df, :, stage), params, RK4_f[:, stage-1], a, a_prime)
-      if !params.constant_g
-        compute_dg!(view(RK4_dg, :, stage), params, RK4_g[:, :, stage-1], a, a_prime)
-      end
-
-      RK4_f[:, stage] .= f .- mfl_λ * params.δt ./ params.δx .* RK4_df[:, stage]
-      if !params.constant_g
-        RK4_g[:, :, stage] .= g .- mfl_λ * params.δt ./ params.δx .* RK4_dg[:, :, stage]
-      end
-
-      # Stage 4
-      stage = 4
-
-      if !params.constant_a
-        compute_a!(a, a_prime, µ, µC, params, RK4_f[:, stage-1], RK4_g[:, :, stage-1])
-      end
-
-      compute_df!(view(RK4_df, :, stage), params, RK4_f[:, stage-1], a, a_prime)
-      if !params.constant_g
-        compute_dg!(view(RK4_dg, :, stage), params, RK4_g[:, :, stage-1], a, a_prime)
-      end
-
-      df .= (RK4_df[:, 1] .+ 2RK4_df[:, 2] + 2RK4_df[:, 3] + RK4_df[:, 4]) ./ 6
-      if !params.constant_g
-        dg .= (RK4_dg[:, :, 1] .+ 2RK4_dg[:, :, 2] + 2RK4_dg[:, :, 3] + RK4_dg[:, :, 4]) ./ 6
-      end
-
-      f -= mfl_λ * params.δt / params.δx * df
-      if !params.constant_g
-        g -= mfl_λ * params.δt / params.δx * dg
-      end
     else
       throw("Unkown time-stepping method '$(params.time_stepping)'")
     end
@@ -775,9 +630,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       push!(store_i, i)
       push!(store_f, copy(f))
       if !params.constant_g
-        f_stats = compute_f_stats(f, g, x)
-        push!(store_g_M1_n, f_stats.g_M1_n)
-        push!(store_f_var, f_stats.f_var)
+        # f_stats = compute_f_stats(f, g, x)
+        # push!(store_g_M1_n, f_stats.g_M1_n)
+        # push!(store_f_var, f_stats.f_var)
         if params.store_g
           push!(store_g, (i, copy(g)))
           if length(store_g) > 100
@@ -794,10 +649,10 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     ["i" => store_i, "f" => cat(store_f...; dims=3)],
   )
   if !params.constant_g
-    append!(store_pairs,
-      ["f_var" => store_f_var],
-      ["g_M1_n" => store_g_M1_n]
-    )
+    # append!(store_pairs,
+    #   ["f_var" => store_f_var],
+    #   ["g_M1_n" => store_g_M1_n]
+    # )
     if params.store_g
       append!(store_pairs,
         ["g/$i" => g for (i, g) in store_g],
@@ -806,21 +661,6 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   end
 
   store_hdf5_data(joinpath(store_dir, "data.hdf5"), store_pairs)
-
-  p = UnicodePlots.lineplot(f, width=100, height=30, yscale=params.plot_scale, name="f")
-  UnicodePlots.lineplot!(p, f_init, name="f_init")
-  println(p)
-
-  p = UnicodePlots.lineplot(a, width=100, height=30, name="a")
-  UnicodePlots.lineplot!(p, a_init, name="a_init")
-  println(p)
-
-  if !params.constant_g
-    p = UnicodePlots.lineplot(store_g_M1_n, width=100, height=30, name="∫∫ ω g(ω,m) dω dm")
-    println(p)
-  end
-
-  @info @fmt extrema(f)
 
   @info @fmt mass_init
   mass = δx * sum(f)

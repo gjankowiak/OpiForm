@@ -86,7 +86,7 @@ function compute_kde(x, ops::Vector{Float64}, group_labels::Vector{Int64})
   interp_kde_ops = zeros(length(x), n_groups)
   for p in unique_labels
     group_ops = map(t -> t[2], filter(args -> group_labels[args[1]] == p, collect(enumerate(ops))))
-    kde_ops = KernelDensity.kde(ops, boundary=(-1, 1), bandwidth=h_SJ)
+    kde_ops = KernelDensity.kde(group_ops, boundary=(-1, 1), bandwidth=h_SJ)
     interp_kde_ops[:,p] = length(group_ops) / length(ops) * KernelDensity.pdf(KernelDensity.InterpKDE(kde_ops), x)
   end
   return interp_kde_ops

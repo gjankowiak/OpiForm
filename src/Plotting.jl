@@ -39,6 +39,8 @@ function plot_f(meanfield_dir::String; kwargs...)
   i_mfl = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "i")
   f = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "f")
 
+  @show size(f)
+
   obs_i = M.Observable(1)
   obs_iter = M.Observable(0)
 
@@ -49,8 +51,13 @@ function plot_f(meanfield_dir::String; kwargs...)
   N = size(f, 1)
   x = build_x(N)
 
-  obs_f = M.@lift f[:, $obs_i]
-  M.lines!(ax1, x, obs_f)
+  obs_f1 = M.@lift f[:, 1, $obs_i]
+  obs_f2 = M.@lift f[:, 2, $obs_i]
+  obs_f3 = M.@lift f[:, 3, $obs_i]
+
+  M.lines!(ax1, x, obs_f1)
+  M.lines!(ax1, x, obs_f2)
+  M.lines!(ax1, x, obs_f3)
 
   stride = get(kwargs, :stride, 1)
   first_idx = get(kwargs, :first_idx, 1)
@@ -66,17 +73,17 @@ function plot_f(meanfield_dir::String; kwargs...)
     pct = lpad(Int(round(100 * ii / length(i_range))), 3, " ")
     print("  Creating movie: $pct%" * "\b"^50 * ", current iteration: $iter")
 
-    if any(isnan, f[:, i])
-      @error "Got NaN in f"
-      return
-    end
+    # if any(isnan, f[:, i])
+    #   @error "Got NaN in f"
+    #   return
+    # end
 
     obs_i[] = i
     obs_iter[] = iter
 
-    first_mass = 2 / N * sum(f[:, i])
-    ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
-    ax1.title = string(iter)
+    # first_mass = 2 / N * sum(f[:, i])
+    # ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
+    # ax1.title = string(iter)
   end
 
   effective_output_filename = joinpath(meanfield_dir, "movie.mp4")

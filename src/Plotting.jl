@@ -35,6 +35,71 @@ function compute_stddev(ω, centers)
   return sqrt.(vec(sum((ω .- centers') .^ 2; dims=1)) / N)
 end
 
+function plot_ω_f(micro_dir::String, meanfield_dir::String; kwargs...)
+  i_micro = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "i")
+  ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
+
+  i_mfl = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "i")
+  f = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "f")
+
+  obs_i = M.Observable(1)
+  obs_iter = M.Observable(0)
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1])
+  ax1.title = "f"
+
+  N = size(f, 1)
+  x = build_x(N)
+
+  obs_ω = M.@lift ω[:, $obs_i]
+
+  obs_f1 = M.@lift f[:, 1, $obs_i]
+  obs_f2 = M.@lift f[:, 2, $obs_i]
+  obs_f3 = M.@lift f[:, 3, $obs_i]
+
+  M.lines!(ax1, x, obs_f1)
+  M.lines!(ax1, x, obs_f2)
+  M.lines!(ax1, x, obs_f3)
+
+  M.hist!(ax1, obs_ω, bins=51, normalization=:pdf)
+
+  stride = get(kwargs, :stride, 1)
+  first_idx = get(kwargs, :first_idx, 1)
+  last_idx = get(kwargs, :last_idx, lastindex(i_mfl))
+  i_range = enumerate([first_idx:stride:last_idx; last_idx])
+
+  function step_i(ii_i_tuple)
+
+    ii, i = ii_i_tuple
+
+    iter = i_mfl[i]
+
+    pct = lpad(Int(round(100 * ii / length(i_range))), 3, " ")
+    print("  Creating movie: $pct%" * "\b"^50 * ", current iteration: $iter")
+
+    # if any(isnan, f[:, i])
+    #   @error "Got NaN in f"
+    #   return
+    # end
+
+    obs_i[] = i
+    obs_iter[] = iter
+
+    # first_mass = 2 / N * sum(f[:, i])
+    # ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
+    # ax1.title = string(iter)
+  end
+
+  effective_output_filename = joinpath(meanfield_dir, "movie.mp4")
+
+  M.record(step_i, fig, effective_output_filename, i_range)
+  @info ("movie saved at $effective_output_filename")
+
+  println()
+
+end
+
 function plot_f(meanfield_dir::String; kwargs...)
   i_mfl = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "i")
   f = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "f")
@@ -600,6 +665,34 @@ function plot_results_no_g(; output_filename::String="",
 
   println()
 
+end
+
+function plot_g_init_multi(store_dir::String; g_max::Float64=2.0)
+  g = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "g_init")
+
+  x = build_x(size(g, 1))
+  δx = x[2] - x[1]
+
+  n_groups = size(g, 3)
+
+  fig = M.Figure(size=(n_groups*100, n_groups*100), figure_padding=0)
+  axes = [M.Axis(fig[i, j], aspect=1) for i in 1:n_groups, j in 1:n_groups]
+  #ax.title = "g(ω,m)"L
+  for i in 1:n_groups
+    for j in 1:n_groups
+      ax = axes[i,j]
+      M.hidedecorations!(ax)
+      M.hidespines!(ax)
+
+      M.heatmap!(ax, x, x, g[:,:,i,j], colorrange=(0, g_max), colormap=:ice)
+      M.tightlimits!(ax)
+    end
+  end
+
+
+  #M.heatmap!(ax, x, x, g, colorrange=(1e-3, g_max), colormap=:haline, lowclip=:black)
+
+  M.save("$store_dir/g_init.png", fig)
 end
 
 function plot_g_init(store_dir::String; g_max::Float64=2.0)

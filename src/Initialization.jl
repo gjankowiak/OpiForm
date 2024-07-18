@@ -16,6 +16,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+using Infiltrator
+
 function get_ωx_ωy!(ωx::Vector{Float64}, ωy::Vector{Float64}, adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64})
   N = length(ω)
   rows = SpA.rowvals(adj_matrix)
@@ -31,24 +33,25 @@ function get_ωx_ωy!(ωx::Vector{Float64}, ωy::Vector{Float64}, adj_matrix::Sp
   end
 end
 
-function get_ωx_ωy!(ωx::Array{Float64}, ωy::Array{Float64}, adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
-  N_p = length(ω)
-  rows = SpA.rowvals(adj_matrix)
-  got = 0
-  for j in 1:N_p
-    nzr = SpA.nzrange(adj_matrix, j)
-    nnz_in_col = length(nzr)
-
-    for r in rows[nzr]
-      p = group_labels[r]
-      q = group_labels[j]
-
-      ωx[got+1:got+nnz_in_col,p] .= ω[r]
-      ωy[got+1:got+nnz_in_col,q] .= ω[j]
+function get_ωx_ωy!(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
+  n_groups = length(unique(group_labels))
+  ωx = [Float64[] for p in 1:n_groups, q in 1:n_groups]
+  ωy = [Float64[] for p in 1:n_groups, q in 1:n_groups]
+  N = size(ω, 1)
+  for i in 1:N
+    for j in 1:N
+      a = adj_matrix[i,j]
+      if a > 0
+        p = group_labels[i]
+        q = group_labels[j]
+        push!(ωx[p,q], ω[i])
+        push!(ωy[p,q], ω[j])
+      end
     end
-
-    got += nnz_in_col
   end
+
+  @show ωx[1,2]
+  return ωx, ωy
 end
 
 """
@@ -66,8 +69,7 @@ end
 function get_ωx_ωy(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
   nnz = SpA.nnz(adj_matrix)
   n_groups = length(unique(group_labels))
-  ωx, ωy = zeros(nnz,n_groups), zeros(nnz,n_groups)
-  get_ωx_ωy!(ωx, ωy, adj_matrix, ω, group_labels)
+  ωx, ωy = get_ωx_ωy!(adj_matrix, ω, group_labels)
   return ωx, ωy
 end
 
@@ -104,11 +106,23 @@ function compute_kde(x, adj_matrix::SpA.SparseMatrixCSC, ops::Vector{Float64}, g
 
   ωx, ωy = get_ωx_ωy(adj_matrix, ops, group_labels)
 
+  # FIXME: debug
+  for p in 1:n_groups
+    for q in 1:n_groups
+      small_idx = (abs.(ωx[p,q]) .< 1e-1 .&& abs.(ωy[p,q]) .< 1e-1)
+      @show length(ωx[p,q])
+      @show sum(small_idx)
+    end
+  end
+
+  offset = 0
+
   for p in unique_labels
     for q in unique_labels
-      kde_a = KernelDensity.kde([ωx[:,p] ωy[:,q]], boundary=((-1, 1), (-1, 1)), bandwidth=(h_SJ, h_SJ))
+      kde_a = KernelDensity.kde([ωx[p,q] ωy[p,q]], boundary=((-1, 1), (-1, 1)), bandwidth=(h_SJ, h_SJ))
       interp = KernelDensity.InterpKDE(kde_a)
-      interp_kde_a[:,:,p,q] = group_sizes[p]*group_sizes[q]/length(ops) * [KernelDensity.pdf(interp, _x, _y) for _x in x, _y in x]
+      # FIXME: missing factor 0.5 ??
+      interp_kde_a[:,:,p,q] = length(ωx[p,q])/length(ops) * [KernelDensity.pdf(interp, _x, _y) for _x in x, _y in x]
     end
   end
 
@@ -447,6 +461,8 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
 
   c_ids_sorted = sort(c_ids)
   n_communities = length(unique(c_ids_sorted))
+
+  # NOTE: this is where the distribution of initial opinions is defined/sampled
 
   # rescale bounds to [0, 1]
   bounds = collect(lfr_kwargs_nt.μ_community_bounds)

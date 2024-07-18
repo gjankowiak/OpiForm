@@ -50,7 +50,6 @@ function get_ωx_ωy!(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{F
     end
   end
 
-  @show ωx[1,2]
   return ωx, ωy
 end
 
@@ -105,15 +104,6 @@ function compute_kde(x, adj_matrix::SpA.SparseMatrixCSC, ops::Vector{Float64}, g
   interp_kde_a = zeros(length(x), length(x), n_groups, n_groups)
 
   ωx, ωy = get_ωx_ωy(adj_matrix, ops, group_labels)
-
-  # FIXME: debug
-  for p in 1:n_groups
-    for q in 1:n_groups
-      small_idx = (abs.(ωx[p,q]) .< 1e-1 .&& abs.(ωy[p,q]) .< 1e-1)
-      @show length(ωx[p,q])
-      @show sum(small_idx)
-    end
-  end
 
   offset = 0
 
@@ -447,6 +437,45 @@ function generate_LFR_ω(params::NamedTuple, c_ids, community_means)
   ω_0 = ω_0[inv_idc_sort]
 end
 
+function generate_LFR_ω_double_bumps(params::NamedTuple, c_ids, community_means)
+
+  # FIXME: hardcoded for 3 communities at (-a, 0, a)
+
+  idc_sort = sortperm(c_ids)
+  inv_idc_sort = invperm(idc_sort)
+  c_ids_sorted = c_ids[idc_sort]
+
+  n_communities = length(unique(c_ids_sorted))
+
+  ω_0 = zeros(params.N_micro)
+
+  got = 0
+
+  for i in 1:n_communities
+    μ = community_means[i]
+    if -1e-3 < µ < 1e-3
+      µ2 = 0
+    else
+      µ2 = -µ/2
+    end
+    σ² = params.init_lfr_kwargs.β_σ²
+
+    idc = searchsorted(c_ids_sorted, i)
+
+    community_size = length(idc)
+
+    got += length(idc)
+
+    comps = Distributions.truncated.([Distributions.Normal(µ, σ²), Distributions.Normal(µ2, σ²/4)], lower=-1.0, upper=1.0)
+    dist = Distributions.MixtureModel(comps, [0.8, 0.2])
+    samples = Distributions.rand(dist, community_size)
+
+    ω_0[idc] .= samples
+  end
+
+  ω_0 = ω_0[inv_idc_sort]
+end
+
 
 function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
 
@@ -475,7 +504,7 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
     @error "unkown value '$(lfr_kwargs_nt.μ_community_distrib)' for parameter μ_community_distrib"
   end
 
-  ω_0 = generate_LFR_ω(params, c_ids, community_means)
+  ω_0 = generate_LFR_ω_double_bumps(params, c_ids, community_means)
 
   return SpA.sparse(g), ω_0, c_ids, community_means
 end
@@ -499,7 +528,7 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       @assert params.init_method_adj_matrix == :from_lfr "init_method_omega set to :from_ldr but init_method_adj_matrix is not!"
     elseif params.init_method_omega == :from_lfr_with_ref
       c_ids, c_expectations = load_lfr_community_data(params.init_lfr_communities_dir)
-      ω_0 = generate_LFR_ω(params, c_ids, c_expectations)
+      ω_0 = generate_LFR_ω_double_bumps(params, c_ids, c_expectations)
     else
       throw("Unknown value $(params.init_method_omega) for parameter init_method_omega")
     end

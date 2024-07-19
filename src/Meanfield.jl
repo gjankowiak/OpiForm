@@ -73,6 +73,9 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
     if params.CFL_violation != :ignore
       CFL_failed_at_idx = findfirst(isone, max.(max_C_l, max_C_r) .> 0.5params.δx / params.δt)
       if !isnothing(CFL_failed_at_idx)
+        if length(CFL_failed_at_idx) > 1
+          CFL_failed_at_idx = CFL_failed_at_idx[1]
+        end
         if params.CFL_violation == :warn
           @warn("CFL not met at x=$(params.x[CFL_failed_at_idx]) (idx=$(CFL_failed_at_idx[1]))")
         elseif params.CFL_violation == :throw

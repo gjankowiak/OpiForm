@@ -37,7 +37,7 @@ function main()
     ))
 
     params = merge(base_params, (
-      max_iter=10000,
+      max_iter=20000,
       δt=1e-3,
       store_every_iter=100,
       store_g=false,

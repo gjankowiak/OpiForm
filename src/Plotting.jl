@@ -35,6 +35,78 @@ function compute_stddev(ω, centers)
   return sqrt.(vec(sum((ω .- centers') .^ 2; dims=1)) / N)
 end
 
+function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfield_single_dir::String; kwargs...)
+  i_micro = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "i")
+  ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
+
+  i_mfl = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "i")
+  f = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "f")
+
+  i_mfl_single = load_hdf5_data(joinpath(meanfield_single_dir, "data.hdf5"), "i")
+  f_single = load_hdf5_data(joinpath(meanfield_single_dir, "data.hdf5"), "f")
+
+  n_groups = size(f, 2)
+
+  obs_i = M.Observable(1)
+  obs_iter = M.Observable(0)
+
+  fig = M.Figure(size=(1920, 1080))
+  ax1 = M.Axis(fig[1, 1])
+  ax1.title = "f"
+
+  N = size(f, 1)
+  x = build_x(N)
+
+  obs_ω = M.@lift ω[:, $obs_i]
+
+  obs_f_single = M.@lift f_single[:, 1, $obs_i]
+
+  obs_f = [M.@lift f[:, k, $obs_i] for k in 1:n_groups]
+
+  M.lines!(ax1, x, obs_f_single, linestyle=:dot, color=:black, linewidth=2)
+
+  for k in 1:n_groups
+    M.lines!(ax1, x, obs_f[k], linewidth=2)
+  end
+
+  M.hist!(ax1, obs_ω, bins=51, normalization=:pdf)
+
+  stride = get(kwargs, :stride, 1)
+  first_idx = get(kwargs, :first_idx, 1)
+  last_idx = get(kwargs, :last_idx, lastindex(i_mfl))
+  i_range = enumerate([first_idx:stride:last_idx; last_idx])
+
+  function step_i(ii_i_tuple)
+
+    ii, i = ii_i_tuple
+
+    iter = i_mfl[i]
+
+    pct = lpad(Int(round(100 * ii / length(i_range))), 3, " ")
+    print("  Creating movie: $pct%" * "\b"^50 * ", current iteration: $iter")
+
+    # if any(isnan, f[:, i])
+    #   @error "Got NaN in f"
+    #   return
+    # end
+
+    obs_i[] = i
+    obs_iter[] = iter
+
+    # first_mass = 2 / N * sum(f[:, i])
+    # ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
+    # ax1.title = string(iter)
+  end
+
+  effective_output_filename = joinpath(meanfield_dir, "movie.mp4")
+
+  M.record(step_i, fig, effective_output_filename, i_range)
+  @info ("movie saved at $effective_output_filename")
+
+  println()
+
+end
+
 function plot_ω_f(micro_dir::String, meanfield_dir::String; kwargs...)
   i_micro = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "i")
   ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")

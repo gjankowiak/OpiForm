@@ -16,8 +16,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-using Infiltrator
-
 function get_ωx_ωy!(ωx::Vector{Float64}, ωy::Vector{Float64}, adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64})
   N = length(ω)
   rows = SpA.rowvals(adj_matrix)
@@ -33,7 +31,7 @@ function get_ωx_ωy!(ωx::Vector{Float64}, ωy::Vector{Float64}, adj_matrix::Sp
   end
 end
 
-function get_ωx_ωy!(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
+function get_ωx_ωy_multigroup_aux(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
   n_groups = length(unique(group_labels))
   ωx = [Float64[] for p in 1:n_groups, q in 1:n_groups]
   ωy = [Float64[] for p in 1:n_groups, q in 1:n_groups]
@@ -65,10 +63,10 @@ function get_ωx_ωy(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Fl
   return ωx, ωy
 end
 
-function get_ωx_ωy(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
+function get_ωx_ωy_multigroup(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}, ω::Vector{Float64}, group_labels::Vector{Int64})
   nnz = SpA.nnz(adj_matrix)
   n_groups = length(unique(group_labels))
-  ωx, ωy = get_ωx_ωy!(adj_matrix, ω, group_labels)
+  ωx, ωy = get_ωx_ωy_multigroup_aux(adj_matrix, ω, group_labels)
   return ωx, ωy
 end
 
@@ -103,7 +101,7 @@ function compute_kde(x, adj_matrix::SpA.SparseMatrixCSC, ops::Vector{Float64}, g
 
   interp_kde_a = zeros(length(x), length(x), n_groups, n_groups)
 
-  ωx, ωy = get_ωx_ωy(adj_matrix, ops, group_labels)
+  ωx, ωy = get_ωx_ωy_multigroup(adj_matrix, ops, group_labels)
 
   offset = 0
 
@@ -179,7 +177,6 @@ Return `n` samples from the probability distribution f/∫f discretized on a gri
 """
 function fast_sampling(f::Function, n::Int64, N_sampling::Int64)
   x = build_x(N_sampling)
-  @show extrema(x)
 
   f_x = f.(x)
 
@@ -437,40 +434,48 @@ function generate_LFR_ω(params::NamedTuple, c_ids, community_means)
   ω_0 = ω_0[inv_idc_sort]
 end
 
-function generate_LFR_ω_double_bumps(params::NamedTuple, c_ids, community_means)
+function generate_LFR_ω_multi_group(params::NamedTuple, args...)
 
-  # FIXME: hardcoded for 3 communities at (-a, 0, a)
+  distrib = params.init_distribution_omega_lfr
 
-  idc_sort = sortperm(c_ids)
-  inv_idc_sort = invperm(idc_sort)
-  c_ids_sorted = c_ids[idc_sort]
+  if distrib == :crossing_bumps
+    c_ids, community_means = args
 
-  n_communities = length(unique(c_ids_sorted))
+    idc_sort = sortperm(c_ids)
+    inv_idc_sort = invperm(idc_sort)
+    c_ids_sorted = c_ids[idc_sort]
 
-  ω_0 = zeros(params.N_micro)
+    n_communities = length(unique(c_ids_sorted))
 
-  got = 0
+    ω_0 = zeros(params.N_micro)
 
-  for i in 1:n_communities
-    μ = community_means[i]
-    if -1e-3 < µ < 1e-3
-      µ2 = 0
-    else
-      µ2 = -µ/2
+    got = 0
+
+    for i in 1:n_communities
+      μ = community_means[i]
+      if -1e-3 < µ < 1e-3
+        µ2 = 0
+      else
+        µ2 = -µ/2
+      end
+      σ² = params.init_lfr_kwargs.β_σ²
+
+      idc = searchsorted(c_ids_sorted, i)
+
+      community_size = length(idc)
+
+      got += length(idc)
+
+      comps = Distributions.truncated.([Distributions.Normal(µ, σ²), Distributions.Normal(µ2, σ²/4)], lower=-1.0, upper=1.0)
+      dist = Distributions.MixtureModel(comps, [0.6, 0.4])
+      samples = Distributions.rand(dist, community_size)
+
+      ω_0[idc] .= samples
     end
-    σ² = params.init_lfr_kwargs.β_σ²
-
-    idc = searchsorted(c_ids_sorted, i)
-
-    community_size = length(idc)
-
-    got += length(idc)
-
-    comps = Distributions.truncated.([Distributions.Normal(µ, σ²), Distributions.Normal(µ2, σ²/4)], lower=-1.0, upper=1.0)
-    dist = Distributions.MixtureModel(comps, [0.8, 0.2])
-    samples = Distributions.rand(dist, community_size)
-
-    ω_0[idc] .= samples
+  elseif distrib == :foobar
+    # code for :foobar
+  else
+    throw("LFR ω initialization mode $(mode) unknown")
   end
 
   ω_0 = ω_0[inv_idc_sort]
@@ -504,7 +509,7 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
     @error "unkown value '$(lfr_kwargs_nt.μ_community_distrib)' for parameter μ_community_distrib"
   end
 
-  ω_0 = generate_LFR_ω_double_bumps(params, c_ids, community_means)
+  ω_0 = generate_LFR_ω_multi_group(params, c_ids, community_means)
 
   return SpA.sparse(g), ω_0, c_ids, community_means
 end
@@ -528,7 +533,7 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       @assert params.init_method_adj_matrix == :from_lfr "init_method_omega set to :from_ldr but init_method_adj_matrix is not!"
     elseif params.init_method_omega == :from_lfr_with_ref
       c_ids, c_expectations = load_lfr_community_data(params.init_lfr_communities_dir)
-      ω_0 = generate_LFR_ω_double_bumps(params, c_ids, c_expectations)
+      ω_0 = generate_LFR_ω_multi_group(params, c_ids, c_expectations)
     else
       throw("Unknown value $(params.init_method_omega) for parameter init_method_omega")
     end
@@ -654,7 +659,6 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
   if mode == :mfl
     # FIXME: make this cleaner ???
     try
-      @show params.init_lfr_communities_dir
       c_ids, _ = load_lfr_community_data(params.init_lfr_communities_dir)
     catch
       c_ids = []
@@ -674,6 +678,9 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
     elseif params.init_method_f == :from_kde_omega
       # Compute KDE
       f_0 = compute_kde(x, ω_0, c_ids)
+      if params.mfl_single_group
+        f_0 = sum(f_0, dims=2)
+      end
     else
       throw("Unknown value $(params.init_method_f) for parameter init_method_f")
     end
@@ -695,6 +702,9 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       @assert !isnothing(adj_matrix) "The adjacency matrix is Nothing. I don't know how to perform a KDE if full_adj_matrix is set."
       # Compute KDE
       g_0 = compute_kde(x, adj_matrix, ω_0, c_ids)
+      if params.mfl_single_group
+        g_0 = sum(g_0, dims=3)
+      end
       α = nothing
     else
       throw("Unknown value $(params.init_method_g) for parameter init_method_g")

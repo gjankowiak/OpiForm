@@ -194,6 +194,14 @@ DEFAULTS = OrderedCollections.OrderedDict(
     * :from\_LFR\_with\_ref, as above but load the LFR community data from the directory pointed by `init_lfr_communities_dir`.
     """
   ),
+  :init_distribution_omega_lfr => (
+    type=Symbol,
+    values=[:crossing_bumps],
+    default=:crossing_bumps,
+    desc=md"""
+    initialization distribution for ω when using LFR groups
+    """
+  ),
   :init_method_adj_matrix => (
     type=Symbol,
     values=[:from_file, :from_sampling_α_init, :from_graph, :from_lfr],
@@ -403,6 +411,13 @@ DEFAULTS = OrderedCollections.OrderedDict(
     default=false,
     desc=md"""
     do not use the evolution equation for `g` but set `g` to `f .* α .* f' / connection_density`.
+    """
+  ),
+  :mfl_single_group => (
+    type=Bool,
+    default=false,
+    desc=md"""
+    Whether to ignore groups for the MFL solution.
     """
   ),
   :connection_density => (

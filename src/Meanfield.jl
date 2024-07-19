@@ -204,7 +204,6 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
     # @assert !(f_x_p_r .|> isnan |> any) "\n NaN detected in f_x_p_r"
     # @assert !(f_x_p_l .|> isnan |> any) "\n NaN detected in f_x_p_l"
 
-    # TODO: check factor
     @. dst = (
       λ * α_l * w_p_l + (1 - λ * (α_l + α_r)) * w_p
       +
@@ -344,7 +343,6 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
     f_x_p_r = @. 0.5 * params.δx * minmod((w_p_rr - w_p_r) / (1 + λ * (α_r - α_rrr)), (w_p_r - w_p) / (1 + λ * (α_r - α_l)))
     f_x_p_l = @. 0.5 * params.δx * minmod((w_p - w_p_l) / (1 + λ * (α_l - α_r)), (w_p_l - w_p_ll) / (1 + λ * (α_l - α_lll)))
 
-    # TODO: check factor
     d_g_ω = @. (
       λ * α_l * w_p_l + (1 - λ * (α_l + α_r)) * w_p
       +
@@ -392,7 +390,6 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
     f_x_p_r = @. 0.5 * params.δx * minmod((w_p_rr - w_p_r) / (1 + λ * (α_r - α_rrr)'), (w_p_r - w_p) / (1 + λ * (α_r - α_l)'))
     f_x_p_l = @. 0.5 * params.δx * minmod((w_p - w_p_l) / (1 + λ * (α_l - α_r)'), (w_p_l - w_p_ll) / (1 + λ * (α_l - α_lll)'))
 
-    # TODO: check factor
     d_g_m = @. (
       λ * α_l' * w_p_l + (1 - λ * (α_l + α_r)') * w_p
       +
@@ -401,24 +398,19 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
 
     dst .= 0.5 .* (d_g_ω .+ d_g_m)
 
-
     return
   else
     throw("unknown flux '$(params.flux)'")
   end
 
-
   # Neumann boundary conditions
-  # FIXME INDICES
-  flux_lω[1] = 0
-  flux_rω[end] = 0
+  flux_lω[1,:,:,:] .= 0
+  flux_rω[end,:,:,:] .= 0
 
-  flux_lm[1] = 0
-  flux_rm[end] = 0
+  flux_lm[:,1,:,:] .= 0
+  flux_rm[:,end,:,:] .= 0
 
   @. dst = flux_rω - flux_lω + flux_rm - flux_lm
-
-
 end
 
 function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, g)

@@ -1,9 +1,11 @@
 import OpiForm
 import DelimitedFiles
 
+include("defs.jl")
+
 function main()
   N_micro = 1000
-  N_mfl = 101
+  N_mfl = 51
 
   function generate_reference(μ)
     params = get_micro_params(μ, 1e-2)
@@ -16,7 +18,7 @@ function main()
   end
 
   function get_reference_dir(μ)
-    return "results/LFR_single_graph_groups_double_bumps/N_micro=$(N_micro),N_mfl=$(N_mfl)/reference/μ=$μ"
+    return "results/$(dir_label)/N_micro=$(N_micro),N_mfl=$(N_mfl)/reference/μ=$μ"
   end
 
   function get_micro_params(μ, β_σ²)
@@ -42,6 +44,7 @@ function main()
       store_every_iter=100,
       store_g=false,
       init_method_omega=:from_lfr_with_ref,
+      init_distribution_omega_lfr=:crossing_bumps,
       init_method_adj_matrix=:from_file,
       init_method_f=:from_kde_omega,
       init_method_g=:from_kde_adj_matrix,
@@ -65,7 +68,7 @@ function main()
 
     run_id, μ, β_σ² = tuple
 
-    prefix = "LFR_single_graph_groups_double_bumps/N_micro=$(N_micro),N_mfl=$(N_mfl)/σ²=$(β_σ²)/μ=$μ"
+    prefix = "$(dir_label)/N_micro=$(N_micro),N_mfl=$(N_mfl)/σ²=$(β_σ²)/μ=$μ"
     store_dir_micro = "results/$(prefix)/micro-$(run_id)"
 
     params = get_micro_params(μ, β_σ²)
@@ -73,17 +76,6 @@ function main()
     # Run the micro model
     params_micro = params
     OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
-    # try
-    #   OpiForm.Micro.launch(store_dir_micro, params_micro; force=true)
-    # catch e
-    #   @error "Micro run failed"
-    #   if e isa String
-    #     @error e
-    #   else
-    #     @error e.msg
-    #   end
-    #   return
-    # end
 
     reference_dir = params.init_lfr_communities_dir
     c_ids, c_expectations = OpiForm.load_lfr_community_data(reference_dir)
@@ -92,49 +84,39 @@ function main()
     store_dir_mfl = "results/$(prefix)/meanfield-$(run_id)"
     params_lLF = merge(params, (
       flux=:lLF, f_dependent_g=false,
-      f_init_func=OpiForm.Params.build_f_init_func_beta_weighted(; communities=c_ids, community_expectations=c_expectations, σ²=β_σ²),
       init_method_omega=:from_file,
       init_method_adj_matrix=:from_file,
       init_micro_filename=joinpath(store_dir_micro, "data.hdf5"),
     ))
-    # try
-      OpiForm.MeanField.launch(store_dir_mfl, params_lLF; force=true)
-    # catch e
-    #   @error "MFL run failed"
-    #   if e isa String
-    #     @error e
-    #   else
-    #     @error e.msg
-    #   end
-    #   return
-    # end
+
+    OpiForm.MeanField.launch(store_dir_mfl, params_lLF; force=true)
+
+    store_dir_mfl_single = "results/$(prefix)/meanfield-single-$(run_id)"
+    params_lLF_single = merge(params_lLF, (
+      mfl_single_group = true,
+    ))
+
+    OpiForm.MeanField.launch(store_dir_mfl_single, params_lLF_single; force=true)
   end
 
-  #β_σ²s = [1e-3, 2e-3, 4e-3, 1.2e-2]
-
-  # μs = [1e-3; 5e-3; 1e-2; range(5e-2, 5e-1, 7)]
-  # β_σ²s = [1e-3, 4e-3, 1.2e-2]
-
   μs = [1e-3; 5e-3; 1e-2; 5e-2; 5e-1]
-  β_σ²s = [1e-3, 4e-3, 1.2e-2]
+  β_σ²s = [1e-3, 4e-3, 1.2e-2, 1e-2]
 
   n_runs = 5
 
-  μ = μs[4]
-  β_σ² = β_σ²s[2]
+  μ = μs[2]
+  β_σ² = β_σ²s[4]
 
   generate_reference(μ)
   f((1, μ, β_σ²))
-  # pmap(generate_reference, μs)
-  # pmap(f, Iterators.product(1:n_runs, μs, β_σ²s))
 
   @info "Computations done"
 
-  prefix = "results/LFR_single_graph_groups_double_bumps/N_micro=$(N_micro),N_mfl=$(N_mfl)/σ²=$(β_σ²)/μ=$μ"
+  prefix = "results/$(dir_label)/N_micro=$(N_micro),N_mfl=$(N_mfl)/σ²=$(β_σ²)/μ=$μ"
 
-  OpiForm.plot_g_init_multi("$(prefix)/meanfield-1")
+  # OpiForm.plot_g_init_multi("$(prefix)/meanfield-1")
 
-  OpiForm.plot_ω_f("$(prefix)/micro-1", "$(prefix)/meanfield-1")
+  OpiForm.plot_ω_f_with_single("$(prefix)/micro-1", "$(prefix)/meanfield-1", "$(prefix)/meanfield-single-1")
 
   return
 

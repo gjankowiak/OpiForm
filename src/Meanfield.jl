@@ -27,6 +27,16 @@ import Graphs: SimpleGraph, is_connected, connected_components
 import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare_directory, issymmetric, symmetry_defect,
   build_x, load_hdf5_data, store_hdf5_data, @fmt, @left, @right, @up_mat, @down_mat, @left_mat, @right_mat
 
+struct CFLError <: Exception
+  iteration::Int
+  index::Int
+  x::Float64
+end
+
+function Base.showerror(io::IO, err::CFLError)
+  print(io, "CFLError: CFL condition violated at iteration $(err.iteration), index $(err.index) (x=$(err.x))")
+end
+
 function check_connected(M::Array{Int64,2})
   g = SimpleGraph(M)
   return is_connected(g)
@@ -47,7 +57,7 @@ function minmod(a, b)
   return r
 end
 
-function compute_df!(dst, params::NamedTuple, f, a, a_prime)
+function compute_df!(dst, params::NamedTuple, f, a, a_prime, iteration::Int)
   n_groups = size(f, 2)
 
   f_l = SA.shiftedarray(f, (1, 0), 0.0)
@@ -79,7 +89,7 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
         if params.CFL_violation == :warn
           @warn("CFL not met at x=$(params.x[CFL_failed_at_idx]) (idx=$(CFL_failed_at_idx[1]))")
         elseif params.CFL_violation == :throw
-          throw("CFL not met at x=$(params.x[CFL_failed_at_idx]) (idx=$(CFL_failed_at_idx[1]))")
+          throw(CFLError(iteration, CFL_failed_at_idx[1], params.x[CFL_failed_at_idx]))
         else
           throw("Unkown CFL_violation setting '$(params.CFL_violation)'")
         end
@@ -216,8 +226,8 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime)
   end
 
   # Neumann boundary conditions
-  flux_l[1,:] .= 0
-  flux_r[end,:] .= 0
+  flux_l[1, :] .= 0
+  flux_r[end, :] .= 0
 
   dst .= flux_r - flux_l
 end
@@ -268,11 +278,11 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
     for p = 1:n_groups
       for q = 1:n_groups
         # Lax-Friedrich flux
-        flux_lω[:,:,p,q] = 0.5 * (g_lω[:,:,p,q] .* a_l[:,p] .+ g[:,:,p,q] .* a[:,p] .- params.LF_relaxation * max_C_l[:,p] .* (g[:,:,p,q] .- g_lω[:,:,p,q]))
-        flux_rω[:,:,p,q] = 0.5 * (g_rω[:,:,p,q] .* a_r[:,p] .+ g[:,:,p,q] .* a[:,p] .- params.LF_relaxation * max_C_r[:,p] .* (g_rω[:,:,p,q] .- g[:,:,p,q]))
+        flux_lω[:, :, p, q] = 0.5 * (g_lω[:, :, p, q] .* a_l[:, p] .+ g[:, :, p, q] .* a[:, p] .- params.LF_relaxation * max_C_l[:, p] .* (g[:, :, p, q] .- g_lω[:, :, p, q]))
+        flux_rω[:, :, p, q] = 0.5 * (g_rω[:, :, p, q] .* a_r[:, p] .+ g[:, :, p, q] .* a[:, p] .- params.LF_relaxation * max_C_r[:, p] .* (g_rω[:, :, p, q] .- g[:, :, p, q]))
 
-        flux_lm[:,:,p,q] = 0.5 * (g_lm[:,:,p,q] .* a_l[:,q]' .+ g[:,:,p,q] .* a[:,q]' .- params.LF_relaxation * max_C_l[:,q] .* (g[:,:,p,q] .- g_lm[:,:,p,q]))
-        flux_rm[:,:,p,q] = 0.5 * (g_rm[:,:,p,q] .* a_r[:,q]' .+ g[:,:,p,q] .* a[:,q]' .- params.LF_relaxation * max_C_r[:,q] .* (g_rm[:,:,p,q] .- g[:,:,p,q]))
+        flux_lm[:, :, p, q] = 0.5 * (g_lm[:, :, p, q] .* a_l[:, q]' .+ g[:, :, p, q] .* a[:, q]' .- params.LF_relaxation * max_C_l[:, q] .* (g[:, :, p, q] .- g_lm[:, :, p, q]))
+        flux_rm[:, :, p, q] = 0.5 * (g_rm[:, :, p, q] .* a_r[:, q]' .+ g[:, :, p, q] .* a[:, q]' .- params.LF_relaxation * max_C_r[:, q] .* (g_rm[:, :, p, q] .- g[:, :, p, q]))
       end
     end
 
@@ -404,11 +414,11 @@ function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
   end
 
   # Neumann boundary conditions
-  flux_lω[1,:,:,:] .= 0
-  flux_rω[end,:,:,:] .= 0
+  flux_lω[1, :, :, :] .= 0
+  flux_rω[end, :, :, :] .= 0
 
-  flux_lm[:,1,:,:] .= 0
-  flux_rm[:,end,:,:] .= 0
+  flux_lm[:, 1, :, :] .= 0
+  flux_rm[:, end, :, :] .= 0
 
   @. dst = flux_rω - flux_lω + flux_rm - flux_lm
 end
@@ -425,13 +435,13 @@ function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, 
     # η(ω,m) = 1 / params.Ω_width
     η = 1 / (params.Ω_width)
   else
-    g_mass = params.δx * sum(g; dims=(2,4))
+    g_mass = params.δx * sum(g; dims=(2, 4))
     g_mass_inv = 1 ./ g_mass
     g_mass_inv[g_mass_inv.>1/params.int_threshold] .= 0
     η = g .* g_mass_inv
   end
 
-  EB = reshape(params.δx * sum(η .* params.D_matrix; dims=(2,4)), (params.N_mfl, n_groups))
+  EB = reshape(params.δx * sum(η .* params.D_matrix; dims=(2, 4)), (params.N_mfl, n_groups))
 
   # Check the normalization.
   # Original model: chamber_size = 1
@@ -590,7 +600,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       else
         compute_a!(a, a_prime, µ, µC, params, f, g)
       end
-      compute_df!(df, params, f, a, a_prime)
+      compute_df!(df, params, f, a, a_prime, i)
       if !params.constant_g && !params.f_dependent_g
         compute_dg!(dg, params, g, a, a_prime)
       end

@@ -3,7 +3,7 @@ import DelimitedFiles
 
 function main()
   N_micro = 1000
-  N_mfl = 101
+  N_mfl = 301
 
   function generate_reference(μ)
     params = get_micro_params(μ, 1e-2)
@@ -37,8 +37,8 @@ function main()
     ))
 
     params = merge(base_params, (
-      max_iter=10000,
-      δt=1e-3,
+      max_iter=200000,
+      δt=1e-4,
       store_every_iter=100,
       store_g=false,
       init_method_omega=:from_lfr_with_ref,
@@ -98,7 +98,7 @@ function main()
       init_micro_filename=joinpath(store_dir_micro, "data.hdf5"),
     ))
     # try
-      OpiForm.MeanField.launch(store_dir_mfl, params_lLF; force=true)
+    OpiForm.MeanField.launch(store_dir_mfl, params_lLF; force=true)
     # catch e
     #   @error "MFL run failed"
     #   if e isa String
@@ -123,7 +123,7 @@ function main()
   μ = μs[4]
   β_σ² = β_σ²s[2]
 
-  generate_reference(μ)
+  #generate_reference(μ)
   f((1, μ, β_σ²))
   # pmap(generate_reference, μs)
   # pmap(f, Iterators.product(1:n_runs, μs, β_σ²s))

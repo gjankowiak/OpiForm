@@ -113,6 +113,13 @@ function plot_ω_f(micro_dir::String, meanfield_dir::String; kwargs...)
 
   i_mfl = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "i")
   f = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "f")
+  params_mfl = Params.from_toml(meanfield_dir)
+
+  if params_mfl.mfl_single_group
+    n_communities = 1
+  else
+    n_communities = params_mfl.init_lfr_target_n_communities
+  end
 
   obs_i = M.Observable(1)
   obs_iter = M.Observable(0)
@@ -126,13 +133,11 @@ function plot_ω_f(micro_dir::String, meanfield_dir::String; kwargs...)
 
   obs_ω = M.@lift ω[:, $obs_i]
 
-  obs_f1 = M.@lift f[:, 1, $obs_i]
-  obs_f2 = M.@lift f[:, 2, $obs_i]
-  obs_f3 = M.@lift f[:, 3, $obs_i]
+  obs_fs = [M.@lift f[:, i, $obs_i] for i in 1:n_communities]
 
-  M.lines!(ax1, x, obs_f1)
-  M.lines!(ax1, x, obs_f2)
-  M.lines!(ax1, x, obs_f3)
+  for i in 1:n_communities
+    M.lines!(ax1, x, obs_fs[i])
+  end
 
   M.hist!(ax1, obs_ω, bins=51, normalization=:pdf)
 
@@ -747,16 +752,16 @@ function plot_g_init_multi(store_dir::String; g_max::Float64=2.0)
 
   n_groups = size(g, 3)
 
-  fig = M.Figure(size=(n_groups*100, n_groups*100), figure_padding=0)
+  fig = M.Figure(size=(n_groups * 100, n_groups * 100), figure_padding=0)
   axes = [M.Axis(fig[i, j], aspect=1) for i in 1:n_groups, j in 1:n_groups]
   #ax.title = "g(ω,m)"L
   for i in 1:n_groups
     for j in 1:n_groups
-      ax = axes[i,j]
+      ax = axes[i, j]
       M.hidedecorations!(ax)
       M.hidespines!(ax)
 
-      M.heatmap!(ax, x, x, g[:,:,i,j], colorrange=(0, g_max), colormap=:ice)
+      M.heatmap!(ax, x, x, g[:, :, i, j], colorrange=(0, g_max), colormap=:ice)
       M.tightlimits!(ax)
     end
   end

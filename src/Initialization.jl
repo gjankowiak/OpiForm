@@ -38,12 +38,12 @@ function get_ωx_ωy_multigroup_aux(adj_matrix::SpA.SparseMatrixCSC{Int64,Int64}
   N = size(ω, 1)
   for i in 1:N
     for j in 1:N
-      a = adj_matrix[i,j]
+      a = adj_matrix[i, j]
       if a > 0
         p = group_labels[i]
         q = group_labels[j]
-        push!(ωx[p,q], ω[i])
-        push!(ωy[p,q], ω[j])
+        push!(ωx[p, q], ω[i])
+        push!(ωy[p, q], ω[j])
       end
     end
   end
@@ -86,7 +86,7 @@ function compute_kde(x, ops::Vector{Float64}, group_labels::Vector{Int64})
   for p in unique_labels
     group_ops = map(t -> t[2], filter(args -> group_labels[args[1]] == p, collect(enumerate(ops))))
     kde_ops = KernelDensity.kde(group_ops, boundary=(-1, 1), bandwidth=h_SJ)
-    interp_kde_ops[:,p] = length(group_ops) / length(ops) * KernelDensity.pdf(KernelDensity.InterpKDE(kde_ops), x)
+    interp_kde_ops[:, p] = length(group_ops) / length(ops) * KernelDensity.pdf(KernelDensity.InterpKDE(kde_ops), x)
   end
   return interp_kde_ops
 end
@@ -107,10 +107,10 @@ function compute_kde(x, adj_matrix::SpA.SparseMatrixCSC, ops::Vector{Float64}, g
 
   for p in unique_labels
     for q in unique_labels
-      kde_a = KernelDensity.kde([ωx[p,q] ωy[p,q]], boundary=((-1, 1), (-1, 1)), bandwidth=(h_SJ, h_SJ))
+      kde_a = KernelDensity.kde([ωx[p, q] ωy[p, q]], boundary=((-1, 1), (-1, 1)), bandwidth=(h_SJ, h_SJ))
       interp = KernelDensity.InterpKDE(kde_a)
       # FIXME: missing factor 0.5 ??
-      interp_kde_a[:,:,p,q] = length(ωx[p,q])/length(ops) * [KernelDensity.pdf(interp, _x, _y) for _x in x, _y in x]
+      interp_kde_a[:, :, p, q] = length(ωx[p, q]) / length(ops) * [KernelDensity.pdf(interp, _x, _y) for _x in x, _y in x]
     end
   end
 
@@ -456,7 +456,7 @@ function generate_LFR_ω_multi_group(params::NamedTuple, args...)
       if -1e-3 < µ < 1e-3
         µ2 = 0
       else
-        µ2 = -µ/2
+        µ2 = -µ / 2
       end
       σ² = params.init_lfr_kwargs.β_σ²
 
@@ -466,7 +466,7 @@ function generate_LFR_ω_multi_group(params::NamedTuple, args...)
 
       got += length(idc)
 
-      comps = Distributions.truncated.([Distributions.Normal(µ, σ²), Distributions.Normal(µ2, σ²/4)], lower=-1.0, upper=1.0)
+      comps = Distributions.truncated.([Distributions.Normal(µ, σ²), Distributions.Normal(µ2, σ² / 4)], lower=-1.0, upper=1.0)
       dist = Distributions.MixtureModel(comps, [0.6, 0.4])
       samples = Distributions.rand(dist, community_size)
 

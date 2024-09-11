@@ -27,6 +27,8 @@ import Graphs: SimpleGraph, is_connected, connected_components
 import ..OpiForm: SA, SpA, M, clip, rand_symmetric, speyes, prepare_directory, issymmetric, symmetry_defect,
   build_x, load_hdf5_data, store_hdf5_data, @fmt, @left, @right, @up_mat, @down_mat, @left_mat, @right_mat
 
+import ..OpiForm.MeanfieldMono: compute_a_mono!, compute_df_mono!, compute_dg_mono!
+
 struct CFLError <: Exception
   iteration::Int
   index::Int
@@ -76,6 +78,7 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime, iteration::Int)
       max_C_l = maximum(abs, reshape([a + a_prime .* f a_l + a_prime_l .* f_l], (params.N_mfl, n_groups, 2)), dims=3)
       max_C_r = maximum(abs, reshape([a + a_prime .* f a_r + a_prime_r .* f_r], (params.N_mfl, n_groups, 2)), dims=3)
     else
+      # should the maximum be also taken across groups? i.e. dims=(2,3) ?
       max_C_l = reshape(maximum(abs, reshape([a a_l], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, n_groups))
       max_C_r = reshape(maximum(abs, reshape([a a_r], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, n_groups))
     end
@@ -569,8 +572,29 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     dg = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
   end
 
+  if params.debug_multigroup
+    @assert params.mfl_single_group
+    @show size(g)
+    f_mono = vec(f)
+    g_mono = reshape(g, (params.N_mfl, params.N_mfl))
+
+    a_mono = zeros(params.N_mfl)
+    a_prime_mono = zeros(params.N_mfl)
+    µ_mono, µC_mono = zeros(params.N_mfl), zeros(params.N_mfl)
+
+    df_mono = zeros(params.N_mfl)
+    if !params.constant_g
+      dg_mono = zeros(params.N_mfl, params.N_mfl)
+    end
+  end
+
   compute_a!(a, a_prime, µ, µC, params, f, g)
   a_init = copy(a)
+
+  if params.debug_multigroup
+    compute_a_mono!(a_mono, a_prime_mono, µ_mono, µC_mono, params, f_mono, g_mono)
+    @show maximum(abs, a_mono .- a)
+  end
 
   ## Print parameters and plot initial conditions before starting
 

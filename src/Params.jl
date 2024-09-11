@@ -609,6 +609,11 @@ DEFAULTS = OrderedCollections.OrderedDict(
     type=Bool,
     default=false,
     desc=md"""whether to perform additional checks, like the preservation of the symmetry of g."""
+  ),
+  :debug_multigroup => (
+    type=Bool,
+    default=false,
+    desc=md"""debug multigroup"""
   )
 )
 

@@ -103,6 +103,8 @@ import .Params
 
 include("Initialization.jl")
 include("Plotting.jl")
+include("MeanfieldMono.jl")
+#import .MeanfieldMono
 include("Meanfield.jl")
 include("Micro.jl")
 

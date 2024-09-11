@@ -703,7 +703,7 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
       # Compute KDE
       g_0 = compute_kde(x, adj_matrix, ω_0, c_ids)
       if params.mfl_single_group
-        g_0 = sum(g_0, dims=3)
+        g_0 = sum(g_0, dims=(3, 4))
       end
       α = nothing
     else

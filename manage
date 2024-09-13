@@ -78,7 +78,7 @@ def load_info(args, name):
         logging.error(f"no run found with name {name}")
         sys.exit(1)
 
-def describe_run(args, name):
+def describe_run(args, name, parameters=False):
     info = load_info(args, name)
     if info is not None:
         if args.one_line:
@@ -93,13 +93,14 @@ def describe_run(args, name):
             print(f"{C.Fore.BLUE}{mfl_data_sha}{C.Fore.RESET}")
             if "description" in info_dict:
                 print(f"  {C.Style.DIM}{info_dict["description"].replace("\n", "\n  ")}{C.Style.NORMAL}")
-            print(f"          N_micro = {info_dict["parameters"]["N_micro"]}")
-            print(f"            N_mfl = {info_dict["parameters"]["N_mfl"]}")
-            print(f"         max_iter = {info_dict["parameters"]["max_iter"]}")
-            print(f"               δt = {info_dict["parameters"]["delta_t"]:.2e}")
-            print(f"    n_communities = {info_dict["parameters"]["n_communities"]}")
-            print(f"                µ = {info_dict["parameters"]["mu"]}")
-            print(f"             β_σ² = {info_dict["parameters"]["beta_sigma_squared"]}")
+            if parameters:
+                print(f"          N_micro = {info_dict["parameters"]["N_micro"]}")
+                print(f"            N_mfl = {info_dict["parameters"]["N_mfl"]}")
+                print(f"         max_iter = {info_dict["parameters"]["max_iter"]}")
+                print(f"               δt = {info_dict["parameters"]["delta_t"]:.2e}")
+                print(f"    n_communities = {info_dict["parameters"]["n_communities"]}")
+                print(f"                µ = {info_dict["parameters"]["mu"]}")
+                print(f"             β_σ² = {info_dict["parameters"]["beta_sigma_squared"]}")
             print()
 
 def check_toml_valid(path):
@@ -126,7 +127,7 @@ def list_runs(args):
         logging.debug(f"probing {info_filename}")
         if os.path.isfile(info_filename):
             found += 1
-            describe_run(args, d)
+            describe_run(args, d, parameters=args.parameters)
     if found == 0:
         print("no run found")
 
@@ -351,6 +352,7 @@ def main():
     list_parser.set_defaults(func=list_runs)
 
     list_parser.add_argument('-1', '--one-line', action="store_true")
+    list_parser.add_argument('-p', '--parameters', action="store_true")
     list_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
 
     move_parser = subparsers.add_parser('move', aliases=['m'], help='move MFL run')

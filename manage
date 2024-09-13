@@ -18,6 +18,10 @@ import subprocess
 
 import glob
 
+import hashlib
+
+import datetime
+
 safe_dir_re = re.compile("^[a-zA-Z0-9._-]+$")
 triple_quotes_re = re.compile("'''")
 
@@ -27,6 +31,10 @@ logging.basicConfig(
 )
 
 BASE_DIR=os.getcwd()
+
+def sha256sum(filename):
+    with open(filename, 'rb', buffering=0) as f:
+        return hashlib.file_digest(f, 'sha256').hexdigest()
 
 def print_parameters(params_dict):
     print("Key parameters:")
@@ -38,17 +46,53 @@ def print_parameters(params_dict):
     print(f" >             µ = {params_dict["init_lfr_kwargs"]["mixing_parameter"]}")
     print(f" >          β_σ² = {params_dict["init_lfr_kwargs"]["β_σ²"]}")
 
-def describe_run(args, name):
+def load_parameters(dir_name):
+    params_filename = os.path.join(dir_name, "params.toml")
+    if not os.path.isfile(params_filename):
+        logging.warning(f"parameter file ({params_filename}) not found!")
+        return None
+    else:
+        logging.debug("loading parameters")
+        with open(params_filename, "rb") as params_f:
+            return tomllib.load(params_f)
+
+def find_info_filename(args, name):
     dest_dir = os.path.abspath(args.save_base_dir)
-    info_filename = os.path.join(dest_dir, name, "info.toml")
-    with open(info_filename, "rb") as info_f:
-        info_dict = tomllib.load(info_f)
+    globbed_dir = glob_run(dest_dir, name)
+    if globbed_dir:
+        target_dir = globbed_dir
+    else:
+        target_dir = os.path.join(dest_dir, name)
+    info_filename = os.path.join(target_dir, "info.toml")
+    if os.path.isfile(info_filename):
+        return {"filename":info_filename, "prefix":target_dir}
+    else:
+        return None
+
+def load_info(args, name):
+    info_filename = find_info_filename(args, name)
+    if info_filename is not None:
+        with open(info_filename["filename"], "rb") as info_f:
+            return {"dict":tomllib.load(info_f), "prefix":info_filename["prefix"]}
+    else:
+        logging.error(f"no run found with name {name}")
+        sys.exit(1)
+
+def describe_run(args, name):
+    info = load_info(args, name)
+    if info is not None:
         if args.one_line:
             print(name)
         else:
+            info_dict = info["dict"]
             saved_size = round(info_dict["size"] / 1024 / 1024)
             print(f"{C.Fore.YELLOW}{C.Style.BRIGHT}{name}{C.Style.NORMAL}{C.Fore.RESET} ({saved_size} MB)")
-            print(f"  {C.Style.DIM}{info_dict["description"].replace("\n", "\n  ")}{C.Style.NORMAL}")
+            print(f"  ran: {info_dict.get("run_date", "-")}")
+            print(f"saved: {info_dict.get("save_date", "-")}")
+            mfl_data_sha = info_dict.get("mfl_data_sha256", "-")
+            print(f"{C.Fore.BLUE}{mfl_data_sha}{C.Fore.RESET}")
+            if "description" in info_dict:
+                print(f"  {C.Style.DIM}{info_dict["description"].replace("\n", "\n  ")}{C.Style.NORMAL}")
             print(f"          N_micro = {info_dict["parameters"]["N_micro"]}")
             print(f"            N_mfl = {info_dict["parameters"]["N_mfl"]}")
             print(f"         max_iter = {info_dict["parameters"]["max_iter"]}")
@@ -86,6 +130,19 @@ def list_runs(args):
     if found == 0:
         print("no run found")
 
+def move_run(args):
+    dest_dir = os.path.abspath(args.save_base_dir)
+    source_dir = os.path.join(dest_dir, args.old_name)
+    destination_dir = os.path.join(dest_dir, args.new_name)
+    if os.path.isfile(os.path.join(source_dir, "info.toml")):
+        if os.path.exists(destination_dir):
+            logging.error("new name already taken")
+            sys.exit(1)
+        shutil.move(source_dir, destination_dir)
+    else:
+        logging.error("unknown run name")
+        sys.exit(1)
+
 def remove_run(args):
     dest_dir = os.path.abspath(args.save_base_dir)
     target_dir = os.path.join(dest_dir, args.target_run)
@@ -96,6 +153,14 @@ def remove_run(args):
         shutil.rmtree(target_dir)
     else:
         logging.error("unknown run name")
+        sys.exit(1)
+
+def play_run(args):
+    info = load_info(args, args.target_run)
+    info_dict = info["dict"]
+    mfl_dir = info_dict["paths"]["mfl_dir"]
+    movie_filename = os.path.join(info["prefix"], mfl_dir, "movie.mp4")
+    subprocess.run(["vlc", movie_filename])
 
 def edit_run(args):
     dest_dir = os.path.abspath(args.save_base_dir)
@@ -108,7 +173,7 @@ def edit_run(args):
     if os.path.isfile(info_filename):
         temp_filename = f"{info_filename}.temp"
         shutil.copy(info_filename, temp_filename)
-        editor = os.environ.get("EDITOR", "vi")
+        editor = os.environ.get("editor", "vi")
         subprocess.run([editor, temp_filename])
         stats = os.stat(temp_filename)
         if stats.st_mtime == stats.st_ctime:
@@ -121,8 +186,10 @@ def edit_run(args):
         else:
             logging.error("new file has invalid syntax, aborting")
             os.remove(temp_filename)
+            sys.exit(1)
     else:
         logging.error("unknown run name")
+        sys.exit(1)
 
 def save(args):
     dest_dir = os.path.abspath(args.save_base_dir)
@@ -139,7 +206,7 @@ def save(args):
         logging.debug("looking for MFL parameter file...")
         params_filename = os.path.join(mfl_dir_abs, "params.toml")
         if not os.path.isfile(params_filename):
-            logging.error("MFL parameter file ({params_filename}) not found!")
+            logging.error(f"MFL parameter file ({params_filename}) not found!")
             sys.exit(1)
         else:
             got_mfl = True
@@ -156,11 +223,12 @@ def save(args):
             logging.warning("micro run data file not found!")
         else:
             micro_dir = os.path.dirname(micro_data_file)
+            micro_dir_abs = os.path.abspath(micro_dir)
             logging.info(f"found micro dir @ {micro_dir}")
 
             micro_params_filename = os.path.join(micro_dir, "params.toml")
             if not os.path.isfile(micro_params_filename):
-                logging.warning("parameter file ({micro_params_filename}) not found!")
+                logging.warning(f"parameter file ({micro_params_filename}) not found!")
             else:
                 logging.debug("loading micro parameters")
                 with open(micro_params_filename, "rb") as micro_params_f:
@@ -173,6 +241,7 @@ def save(args):
                     logging.warning("reference data file not found!")
                 else:
                     ref_dir = os.path.dirname(ref_data_file)
+                    ref_dir_abs = os.path.abspath(ref_dir)
                     logging.info(f"found ref dir @ {ref_dir}")
 
                     got_ref = True
@@ -202,21 +271,28 @@ def save(args):
         pathlib.Path(dest_dir).mkdir(parents=True, exist_ok=True)
 
         if got_mfl: # actually not needed
-            mfl_dest_full_dir = os.path.join(dest_prefix, mfl_dir.removeprefix(os.path.join(os.getcwd(), "results/")))
+            mfl_dest_full_dir = os.path.join(dest_prefix, mfl_dir_abs.removeprefix(os.path.join(os.getcwd(), "results/")))
             logging.info(f"copying mfl data to {mfl_dest_full_dir}")
             shutil.copytree(mfl_dir, mfl_dest_full_dir)
 
         if got_micro:
-            micro_dest_full_dir = os.path.join(dest_prefix, micro_dir.removeprefix(os.path.join(os.getcwd(), "results/")))
+            micro_dest_full_dir = os.path.join(dest_prefix, micro_dir_abs.removeprefix(os.path.join(os.getcwd(), "results/")))
             logging.info(f"copying micro data to {micro_dest_full_dir}")
             shutil.copytree(micro_dir, micro_dest_full_dir)
 
         if got_ref:
-            ref_dest_full_dir = os.path.join(dest_prefix, ref_dir.removeprefix(os.path.join(os.getcwd(), "results/")))
+            ref_dest_full_dir = os.path.join(dest_prefix, ref_dir_abs.removeprefix(os.path.join(os.getcwd(), "results/")))
             logging.info(f"copying ref data to {ref_dest_full_dir}")
             shutil.copytree(ref_dir, ref_dest_full_dir)
 
         saved_size = sum(f.stat().st_size for f in pathlib.Path(dest_prefix).glob('**/*') if f.is_file())
+
+        mfl_data_sha = sha256sum(os.path.join(mfl_dir_abs, "data.hdf5"))
+
+        save_date = datetime.datetime.now().strftime('%a %d %b %H:%M:%S %Y')
+
+        stat = os.stat(os.path.join(mfl_dir_abs, "data.hdf5"))
+        run_date = datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%a %d %b %H:%M:%S %Y')
 
         # create a TOML file to synthesize this run
         info_filename = os.path.join(dest_prefix, "info.toml")
@@ -227,6 +303,9 @@ def save(args):
                 info_f.write("description = '''\n")
                 info_f.write(f"{description}'''\n")
             info_f.write(f"size = {saved_size}\n")
+            info_f.write(f"mfl_data_sha256 = '{mfl_data_sha}'\n")
+            info_f.write(f"save_date = '{save_date}'\n")
+            info_f.write(f"run_date = '{run_date}'\n")
 
             info_f.write("[parameters]\n")
             info_f.write(f"N_micro = {mfl_params_dict["N_micro"]}\n")
@@ -274,6 +353,13 @@ def main():
     list_parser.add_argument('-1', '--one-line', action="store_true")
     list_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
 
+    move_parser = subparsers.add_parser('move', aliases=['m'], help='move MFL run')
+    move_parser.set_defaults(func=move_run)
+
+    move_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
+    move_parser.add_argument('old_name')
+    move_parser.add_argument('new_name')
+
     remove_parser = subparsers.add_parser('remove', aliases=['r'], help='remove MFL run')
     remove_parser.set_defaults(func=remove_run)
 
@@ -285,6 +371,12 @@ def main():
 
     edit_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
     edit_parser.add_argument('target_run')
+
+    play_parser = subparsers.add_parser('play', aliases=['p'], help='play MFL run')
+    play_parser.set_defaults(func=play_run)
+
+    play_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
+    play_parser.add_argument('target_run')
 
     args = parser.parse_args()
 

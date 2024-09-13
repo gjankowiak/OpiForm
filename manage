@@ -1,0 +1,298 @@
+#!/usr/bin/env python
+
+import os
+import argparse
+import tomllib
+
+import logging
+
+import sys
+import re
+
+import pathlib
+
+import colorama as C
+
+import shutil
+import subprocess
+
+import glob
+
+safe_dir_re = re.compile("^[a-zA-Z0-9._-]+$")
+triple_quotes_re = re.compile("'''")
+
+logging.basicConfig(
+    format="[{levelname}] {message}",
+    style="{",
+)
+
+BASE_DIR=os.getcwd()
+
+def print_parameters(params_dict):
+    print("Key parameters:")
+    print(f" >       N_micro = {params_dict["N_micro"]}")
+    print(f" >         N_mfl = {params_dict["N_mfl"]}")
+    print(f" >      max_iter = {params_dict["max_iter"]}")
+    print(f" >            δt = {params_dict["δt"]}")
+    print(f" > n_communities = {params_dict["init_lfr_target_n_communities"]}")
+    print(f" >             µ = {params_dict["init_lfr_kwargs"]["mixing_parameter"]}")
+    print(f" >          β_σ² = {params_dict["init_lfr_kwargs"]["β_σ²"]}")
+
+def describe_run(args, name):
+    dest_dir = os.path.abspath(args.save_base_dir)
+    info_filename = os.path.join(dest_dir, name, "info.toml")
+    with open(info_filename, "rb") as info_f:
+        info_dict = tomllib.load(info_f)
+        if args.one_line:
+            print(name)
+        else:
+            saved_size = round(info_dict["size"] / 1024 / 1024)
+            print(f"{C.Fore.YELLOW}{C.Style.BRIGHT}{name}{C.Style.NORMAL}{C.Fore.RESET} ({saved_size} MB)")
+            print(f"  {C.Style.DIM}{info_dict["description"].replace("\n", "\n  ")}{C.Style.NORMAL}")
+            print(f"          N_micro = {info_dict["parameters"]["N_micro"]}")
+            print(f"            N_mfl = {info_dict["parameters"]["N_mfl"]}")
+            print(f"         max_iter = {info_dict["parameters"]["max_iter"]}")
+            print(f"               δt = {info_dict["parameters"]["delta_t"]:.2e}")
+            print(f"    n_communities = {info_dict["parameters"]["n_communities"]}")
+            print(f"                µ = {info_dict["parameters"]["mu"]}")
+            print(f"             β_σ² = {info_dict["parameters"]["beta_sigma_squared"]}")
+            print()
+
+def check_toml_valid(path):
+    with open(path, "rb") as f:
+        try:
+            tomllib.load(f)
+        except:
+            return False
+        return True
+
+def glob_run(dest_dir, name):
+    globbed_dirs = glob.glob(f"{dest_dir}/{name}*")
+    if len(globbed_dirs) == 1:
+        return globbed_dirs[0]
+    else:
+        return False
+
+
+def list_runs(args):
+    dest_dir = os.path.abspath(args.save_base_dir)
+    found = 0
+    for d in os.listdir(dest_dir):
+        info_filename = os.path.join(dest_dir, d, "info.toml")
+        logging.debug(f"probing {info_filename}")
+        if os.path.isfile(info_filename):
+            found += 1
+            describe_run(args, d)
+    if found == 0:
+        print("no run found")
+
+def remove_run(args):
+    dest_dir = os.path.abspath(args.save_base_dir)
+    target_dir = os.path.join(dest_dir, args.target_run)
+    if os.path.isfile(os.path.join(target_dir, "info.toml")):
+        ans = input(f"remove run {args.target_run}? [y/N]")
+        if ans != 'y':
+            return
+        shutil.rmtree(target_dir)
+    else:
+        logging.error("unknown run name")
+
+def edit_run(args):
+    dest_dir = os.path.abspath(args.save_base_dir)
+    globbed_dir = glob_run(dest_dir, args.target_run)
+    if globbed_dir:
+        target_dir = globbed_dir
+    else:
+        target_dir = os.path.join(dest_dir, args.target_run)
+    info_filename = os.path.join(target_dir, "info.toml")
+    if os.path.isfile(info_filename):
+        temp_filename = f"{info_filename}.temp"
+        shutil.copy(info_filename, temp_filename)
+        editor = os.environ.get("EDITOR", "vi")
+        subprocess.run([editor, temp_filename])
+        stats = os.stat(temp_filename)
+        if stats.st_mtime == stats.st_ctime:
+            # file was not modified since it was created, aborting
+            logging.info("run info file left unmodified")
+            os.remove(temp_filename)
+        elif check_toml_valid(temp_filename):
+            logging.info("run info file updated")
+            shutil.move(temp_filename, info_filename)
+        else:
+            logging.error("new file has invalid syntax, aborting")
+            os.remove(temp_filename)
+    else:
+        logging.error("unknown run name")
+
+def save(args):
+    dest_dir = os.path.abspath(args.save_base_dir)
+
+    for mfl_dir in args.dirnames:
+
+        got_mfl = False
+        got_micro = False
+        got_ref = False
+
+        mfl_dir_abs = os.path.abspath(mfl_dir)
+        logging.info(f"processing {mfl_dir}")
+
+        logging.debug("looking for MFL parameter file...")
+        params_filename = os.path.join(mfl_dir_abs, "params.toml")
+        if not os.path.isfile(params_filename):
+            logging.error("MFL parameter file ({params_filename}) not found!")
+            sys.exit(1)
+        else:
+            got_mfl = True
+
+        logging.debug("copying MFL dir")
+        shutil
+
+        logging.debug("loading MFL parameters")
+        with open(params_filename, "rb") as params_f:
+            mfl_params_dict = tomllib.load(params_f)
+
+        micro_data_file = mfl_params_dict.get("init_micro_filename", None)
+        if micro_data_file is None:
+            logging.warning("micro run data file not found!")
+        else:
+            micro_dir = os.path.dirname(micro_data_file)
+            logging.info(f"found micro dir @ {micro_dir}")
+
+            micro_params_filename = os.path.join(micro_dir, "params.toml")
+            if not os.path.isfile(micro_params_filename):
+                logging.warning("parameter file ({micro_params_filename}) not found!")
+            else:
+                logging.debug("loading micro parameters")
+                with open(micro_params_filename, "rb") as micro_params_f:
+                    micro_params_dict = tomllib.load(micro_params_f)
+
+                got_micro = True
+
+                ref_data_file = micro_params_dict.get("init_micro_filename", None)
+                if ref_data_file is None:
+                    logging.warning("reference data file not found!")
+                else:
+                    ref_dir = os.path.dirname(ref_data_file)
+                    logging.info(f"found ref dir @ {ref_dir}")
+
+                    got_ref = True
+
+        print_parameters(mfl_params_dict)
+
+        short_name = ""
+        while not safe_dir_re.match(short_name):
+            short_name = input("Short name: ")
+            dest_prefix = os.path.join(dest_dir, short_name)
+            if os.path.isdir(dest_prefix):
+                logging.error("this name is already taken, choose another")
+                short_name = ""
+
+
+        description = ""
+        description_valid = False
+        while not description_valid:
+            print("description (finish with Ctrl+D): ")
+            description = sys.stdin.read().strip()
+            if triple_quotes_re.search(description):
+                logging.error("triple quotes are not allowed in the description")
+                continue
+            description_valid = True
+
+        # create destination dir (got_mfl is True at this point)
+        pathlib.Path(dest_dir).mkdir(parents=True, exist_ok=True)
+
+        if got_mfl: # actually not needed
+            mfl_dest_full_dir = os.path.join(dest_prefix, mfl_dir.removeprefix(os.path.join(os.getcwd(), "results/")))
+            logging.info(f"copying mfl data to {mfl_dest_full_dir}")
+            shutil.copytree(mfl_dir, mfl_dest_full_dir)
+
+        if got_micro:
+            micro_dest_full_dir = os.path.join(dest_prefix, micro_dir.removeprefix(os.path.join(os.getcwd(), "results/")))
+            logging.info(f"copying micro data to {micro_dest_full_dir}")
+            shutil.copytree(micro_dir, micro_dest_full_dir)
+
+        if got_ref:
+            ref_dest_full_dir = os.path.join(dest_prefix, ref_dir.removeprefix(os.path.join(os.getcwd(), "results/")))
+            logging.info(f"copying ref data to {ref_dest_full_dir}")
+            shutil.copytree(ref_dir, ref_dest_full_dir)
+
+        saved_size = sum(f.stat().st_size for f in pathlib.Path(dest_prefix).glob('**/*') if f.is_file())
+
+        # create a TOML file to synthesize this run
+        info_filename = os.path.join(dest_prefix, "info.toml")
+        logging.info(f"creating info file @ {info_filename}")
+        with open(info_filename, "w") as info_f:
+            info_f.write(f"short_name = '{short_name}'\n")
+            if len(description) > 0:
+                info_f.write("description = '''\n")
+                info_f.write(f"{description}'''\n")
+            info_f.write(f"size = {saved_size}\n")
+
+            info_f.write("[parameters]\n")
+            info_f.write(f"N_micro = {mfl_params_dict["N_micro"]}\n")
+            info_f.write(f"N_mfl = {mfl_params_dict["N_mfl"]}\n")
+            info_f.write(f"max_iter = {mfl_params_dict["max_iter"]}\n")
+            info_f.write(f"delta_t = {mfl_params_dict["δt"]}\n")
+            info_f.write(f"n_communities = {mfl_params_dict["init_lfr_target_n_communities"]}\n")
+            info_f.write(f"mu = {mfl_params_dict["init_lfr_kwargs"]["mixing_parameter"]}\n")
+            info_f.write(f"beta_sigma_squared = {mfl_params_dict["init_lfr_kwargs"]["β_σ²"]}\n")
+
+            info_f.write("[paths]\n")
+            info_f.write(f"mfl_dir = \"{mfl_dir.removeprefix("results/")}\"\n")
+            if got_micro:
+                info_f.write(f"micro_dir = \"{micro_dir.removeprefix("results/")}\"\n")
+            if got_ref:
+                info_f.write(f"ref_dir = \"{ref_dir.removeprefix("results/")}\"\n")
+
+            # git_commit_id = subprocess.run(["git", "-C", "dev/OpiForm", "rev-parse", "HEAD"], capture_output = True, text=True).stdout.strip()
+            # info_f.write("[git]\n")
+            # info_f.write(f"commit_id = {git_commit_id}")
+
+
+
+
+
+def main():
+
+    parser = argparse.ArgumentParser(
+                    prog='manage',
+                    description='manage OpiForm simulation results')
+
+    parser.add_argument('-v', '--verbose', action='store_true')
+ 
+    subparsers = parser.add_subparsers(help='command', required=True)
+
+    save_parser = subparsers.add_parser('save', aliases=['s'], help='save MFL run along with reference and micro run, with a description')
+    save_parser.set_defaults(func=save)
+
+    save_parser.add_argument('dirnames', nargs='+')
+    save_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
+
+    list_parser = subparsers.add_parser('list', aliases=['l'], help='list MFL runs')
+    list_parser.set_defaults(func=list_runs)
+
+    list_parser.add_argument('-1', '--one-line', action="store_true")
+    list_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
+
+    remove_parser = subparsers.add_parser('remove', aliases=['r'], help='remove MFL run')
+    remove_parser.set_defaults(func=remove_run)
+
+    remove_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
+    remove_parser.add_argument('target_run')
+
+    edit_parser = subparsers.add_parser('edit', aliases=['e'], help='edit MFL run')
+    edit_parser.set_defaults(func=edit_run)
+
+    edit_parser.add_argument('-d', '--save-base-dir', type=str, default="saved_results")
+    edit_parser.add_argument('target_run')
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+
+    args.func(args)
+
+main()

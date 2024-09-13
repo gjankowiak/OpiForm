@@ -83,19 +83,18 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime, iteration::Int)
       max_C_r = reshape(maximum(abs, reshape([a a_r], (params.N_mfl, n_groups, 2)), dims=3), (params.N_mfl, n_groups))
     end
 
+    err = (cfl_ok=true,)
+
     if params.CFL_violation != :ignore
       CFL_failed_at_idx = findfirst(isone, max.(max_C_l, max_C_r) .> 0.5params.δx / params.δt)
       if !isnothing(CFL_failed_at_idx)
         if length(CFL_failed_at_idx) > 1
-          CFL_failed_at_idx = CFL_failed_at_idx[1]
+          CFL_failed_at_idx = CFL_failed_at_idx[1:1]
         end
-        if params.CFL_violation == :warn
-          @warn("CFL not met at x=$(params.x[CFL_failed_at_idx]) (idx=$(CFL_failed_at_idx[1]))")
-        elseif params.CFL_violation == :throw
-          throw(CFLError(iteration, CFL_failed_at_idx[1], params.x[CFL_failed_at_idx]))
-        else
-          throw("Unkown CFL_violation setting '$(params.CFL_violation)'")
-        end
+        err = (
+          cfl_ok=false,
+          msg="CFLError: CFL condition violated at iteration $(iteration), index $(CFL_failed_at_idx[1]) (x=$(params.x[CFL_failed_at_idx[1]]))"
+        )
       end
     end
 
@@ -233,6 +232,8 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime, iteration::Int)
   flux_r[end, :] .= 0
 
   dst .= flux_r - flux_l
+
+  return err
 end
 
 function compute_dg!(dst, params::NamedTuple, g, a, a_prime)
@@ -484,6 +485,12 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
 
   prepare_directory(store_dir, params_in, :mfl, force=force)
 
+  if !isdir(store_dir)
+    throw("Directory $(store_dir) does not exist!")
+  end
+
+  hdf5_data_path = joinpath(store_dir, "data.hdf5")
+
   # Domain parameters
   # FIXME: this is not used consistently
   Ω_left, Ω_right = -1, 1
@@ -528,11 +535,11 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   ))
 
   # FIXME:
-  f_init = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "f_init")
+  f_init = load_hdf5_data(hdf5_data_path, "f_init")
   n_groups = size(f_init, 2)
   f = copy(f_init)
   if !params.constant_g
-    g = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "g_init")
+    g = load_hdf5_data(hdf5_data_path, "g_init")
   else
     g = nothing
   end
@@ -540,14 +547,11 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   i = 0
 
   # FIXME: remove
-  α = load_hdf5_data(joinpath(store_dir, "data.hdf5"), "alpha")
+  α = load_hdf5_data(hdf5_data_path, "alpha")
   if params.f_dependent_g
     @assert !isnothing(α) "α is Nothing, but f_dependent_g is set!"
   end
 
-  if !isdir(store_dir)
-    throw("Directory $(store_dir) does not exist!")
-  end
   store_i = [i]
   store_f = [copy(f)]
   if !params.constant_g
@@ -571,6 +575,24 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   if !params.constant_g
     dg = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
   end
+
+  backtrace_max_size = 10
+  backtrace_size = 1
+  backtrace_f = zeros((size(f)..., backtrace_max_size))
+  backtrace_g = zeros((size(g)..., backtrace_max_size))
+
+  function backtrace_push(f, g)
+    # rollover
+    for i in backtrace_max_size:-1:2
+      backtrace_f[:, :, i] .= backtrace_f[:, :, i-1]
+      backtrace_g[:, :, :, :, i] .= backtrace_g[:, :, :, :, i-1]
+    end
+    backtrace_f[:, :, 1] .= f
+    backtrace_g[:, :, :, :, 1] .= g
+    backtrace_size = min(backtrace_max_size, backtrace_size + 1)
+  end
+
+  backtrace_push(f, g)
 
   if params.debug_multigroup
     @assert params.mfl_single_group
@@ -624,11 +646,26 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       else
         compute_a!(a, a_prime, µ, µC, params, f, g)
       end
-      compute_df!(df, params, f, a, a_prime, i)
+      err = compute_df!(df, params, f, a, a_prime, i)
+      if !err.cfl_ok
+        if params.CFL_violation == :warn
+          @warn err.msg
+        elseif params.CFL_violation == :abort
+          @error err.msg
+          store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["backtrace_f" => backtrace_f, "backtrace_g" => backtrace_g])
+          @info "Backtrace saved to $(hdf5_data_path)"
+          return merge((success=false,), err)
+        end
+      end
       if !params.constant_g && !params.f_dependent_g
         compute_dg!(dg, params, g, a, a_prime)
       end
-      @assert !(df .|> isnan |> any) "\n NaN detected in df at iteration $i"
+      if (df .|> isnan |> any)
+        return (
+          success=false,
+          msg="NaN detected in df at iteration $i"
+        )
+      end
 
       ###################################
       #          TIME STEPPING          #
@@ -651,6 +688,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
           end
         end
       end
+      backtrace_push(f, g)
     else
       throw("Unkown time-stepping method '$(params.time_stepping)'")
     end
@@ -665,7 +703,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
         if params.store_g
           push!(store_g, (i, copy(g)))
           if length(store_g) > 100
-            store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["g/$i" => g for (i, g) in store_g])
+            store_hdf5_data(hdf5_data_path, ["g/$i" => g for (i, g) in store_g])
             empty!(store_g)
           end
         end
@@ -689,14 +727,15 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     end
   end
 
-  store_hdf5_data(joinpath(store_dir, "data.hdf5"), store_pairs)
+  store_hdf5_data(hdf5_data_path, store_pairs)
 
   @info @fmt mass_init
   mass = δx * sum(f)
   @info @fmt mass
 
   @info "Done"
+
+  return (success=true,)
 end
 
 end
-

@@ -107,6 +107,45 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
 
 end
 
+function plot_backtrace(meanfield_dir::String)
+  params_mfl = Params.from_toml(meanfield_dir)
+  backtrace_f = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "backtrace_f")
+  backtrace_g = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "backtrace_g")
+
+  backtrace_size = size(backtrace_f, 3)
+
+  filenames = String[]
+
+  if params_mfl.mfl_single_group
+    n_communities = 1
+  else
+    n_communities = params_mfl.init_lfr_target_n_communities
+  end
+
+  N = size(backtrace_f, 1)
+  x = build_x(N)
+
+  for k in backtrace_size:-1:1
+
+    if all(==(0.0), backtrace_f[:, :, k])
+      continue
+    end
+
+    fig = M.Figure(size=(1920, 1080))
+    ax1 = M.Axis(fig[1, 1])
+    ax1.title = "f @ crash - $(k)"
+
+    for i in 1:n_communities
+      M.lines!(ax1, x, backtrace_f[:, i, k])
+    end
+
+    effective_output_filename = joinpath(meanfield_dir, "backtrace_$(k).pdf")
+    M.save(effective_output_filename, fig)
+    push!(filenames, effective_output_filename)
+  end
+  run(Cmd(["pdfjoin", filenames...]))
+end
+
 function plot_ω_f(micro_dir::String, meanfield_dir::String; kwargs...)
   i_micro = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "i")
   ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")

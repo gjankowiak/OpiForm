@@ -601,7 +601,7 @@ DEFAULTS = OrderedCollections.OrderedDict(
   ),
   :CFL_violation => (
     type=Symbol,
-    values=[:ignore, :warn, :throw],
+    values=[:ignore, :warn, :abort],
     default=:throw,
     desc=md"""how to handle CFL violations."""
   ),

@@ -89,7 +89,7 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime, iteration::Int)
       CFL_failed_at_idx = findfirst(isone, max.(max_C_l, max_C_r) .> 0.5params.δx / params.δt)
       if !isnothing(CFL_failed_at_idx)
         if length(CFL_failed_at_idx) > 1
-          CFL_failed_at_idx = CFL_failed_at_idx[1:1]
+          CFL_failed_at_idx = CFL_failed_at_idx[1]
         end
         err = (
           cfl_ok=false,
@@ -720,6 +720,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     #   ["f_var" => store_f_var],
     #   ["g_M1_n" => store_g_M1_n]
     # )
+    append!(store_pairs,
+      ["g_end" => g]
+    )
     if params.store_g
       append!(store_pairs,
         ["g/$i" => g for (i, g) in store_g],

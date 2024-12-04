@@ -537,6 +537,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
   # FIXME:
   f_init = load_hdf5_data(hdf5_data_path, "f_init")
   n_groups = size(f_init, 2)
+  @assert n_groups < 10
   f = copy(f_init)
   if !params.constant_g
     g = load_hdf5_data(hdf5_data_path, "g_init")
@@ -576,23 +577,25 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     dg = zeros(params.N_mfl, params.N_mfl, n_groups, n_groups)
   end
 
-  backtrace_max_size = 10
-  backtrace_size = 1
-  backtrace_f = zeros((size(f)..., backtrace_max_size))
-  backtrace_g = zeros((size(g)..., backtrace_max_size))
+  if get(params, :enable_backtrace, false)
+    backtrace_max_size = 10
+    backtrace_size = 1
+    backtrace_f = zeros((size(f)..., backtrace_max_size))
+    backtrace_g = zeros((size(g)..., backtrace_max_size))
 
-  function backtrace_push(f, g)
-    # rollover
-    for i in backtrace_max_size:-1:2
-      backtrace_f[:, :, i] .= backtrace_f[:, :, i-1]
-      backtrace_g[:, :, :, :, i] .= backtrace_g[:, :, :, :, i-1]
+    function backtrace_push(f, g)
+      # rollover
+      for i in backtrace_max_size:-1:2
+        backtrace_f[:, :, i] .= backtrace_f[:, :, i-1]
+        backtrace_g[:, :, :, :, i] .= backtrace_g[:, :, :, :, i-1]
+      end
+      backtrace_f[:, :, 1] .= f
+      backtrace_g[:, :, :, :, 1] .= g
+      backtrace_size = min(backtrace_max_size, backtrace_size + 1)
     end
-    backtrace_f[:, :, 1] .= f
-    backtrace_g[:, :, :, :, 1] .= g
-    backtrace_size = min(backtrace_max_size, backtrace_size + 1)
-  end
 
-  backtrace_push(f, g)
+    backtrace_push(f, g)
+  end
 
   if params.debug_multigroup
     @assert params.mfl_single_group
@@ -652,8 +655,10 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
           @warn err.msg
         elseif params.CFL_violation == :abort
           @error err.msg
-          store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["backtrace_f" => backtrace_f, "backtrace_g" => backtrace_g])
-          @info "Backtrace saved to $(hdf5_data_path)"
+          if get(params, :enable_backtrace, false)
+            store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["backtrace_f" => backtrace_f, "backtrace_g" => backtrace_g])
+            @info "Backtrace saved to $(hdf5_data_path)"
+          end
           return merge((success=false,), err)
         end
       end
@@ -688,7 +693,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
           end
         end
       end
-      backtrace_push(f, g)
+      if get(params, :enable_backtrace, false)
+        backtrace_push(f, g)
+      end
     else
       throw("Unkown time-stepping method '$(params.time_stepping)'")
     end

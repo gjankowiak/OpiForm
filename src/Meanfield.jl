@@ -547,10 +547,8 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
 
   i = 0
 
-  # FIXME: remove
-  α = load_hdf5_data(hdf5_data_path, "alpha")
   if params.f_dependent_g
-    @assert !isnothing(α) "α is Nothing, but f_dependent_g is set!"
+    throw("f_dependent_g is deprecated")
   end
 
   store_i = [i]

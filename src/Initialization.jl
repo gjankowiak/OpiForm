@@ -563,12 +563,16 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
     elseif params.init_method_adj_matrix == :from_lfr
       tries = 0
       adj_matrix, ω_0, c_ids, c_expectations = nothing, nothing, nothing, nothing
+      @info "Generating LFR graph"
       while tries < params.init_lfr_max_tries
         tries += 1
         adj_matrix, ω_0, c_ids, c_expectations = initialize_LFR(params, params.init_lfr_args...; params.init_lfr_kwargs...)
-        if params.init_lfr_target_n_communities > 0 && (length(unique(c_ids)) == params.init_lfr_target_n_communities)
+        n_communities = length(unique(c_ids))
+        @info "attempt $(tries): generated graph with $(n_communities) communities"
+        if params.init_lfr_target_n_communities > 0 && (n_communities == params.init_lfr_target_n_communities)
           break
         end
+        adj_matrix = nothing
       end
       if isnothing(adj_matrix)
         throw(ErrorException("Could not generate a LFR graph with $(params.init_lfr_target_n_communities) communities with the given parameters"))
@@ -589,32 +593,32 @@ function prepare_initial_data(store_dir::String, params::NamedTuple, mode::Symbo
     # CairoMakie.activate!()
 
     # Define the colormap
-    cmap(x) = x < 0 ? CairoMakie.Makie.RGB{Float64}(1.0, 1 + x, 1 + x) : CairoMakie.Makie.RGB{Float64}(1 - x, 1 - x, 1.0)
-    node_colors = map(cmap, ω_0)
-    graph = Graphs.SimpleGraphs.SimpleGraph(adj_matrix)
-    n_edges = Graphs.ne(graph)
-
-    # Plot the graph using 3 different layouts
-    for layout in [:Stress, :Spring, :Shell]
-      layout_name = lowercase(string(layout))
-      if layout == :Stress && !Graphs.is_connected(graph)
-        @warn "The graph is not connected, skipping layout '$layout_name'"
-        continue
-      end
-      layout_fn = joinpath(store_dir, "graph_$(layout_name).svg")
-      try
-        fig = CairoMakie.Figure(size=(2000, 2000))
-        ax = CairoMakie.Axis(fig[1, 1])
-        CairoMakie.hidedecorations!(ax)
-        GraphMakie.graphplot!(ax, graph; layout=getfield(GraphMakie, layout)(), node_color=node_colors, alpha=0.1, edge_width=0.1)
-        CairoMakie.save(layout_fn, fig)
-        @info "Graph view saved at $(layout_fn)"
-      catch
-        @warn "Graph view failed with layout '$layout_name' (disconnected graph?)"
-      end
-    end
-
     if params.init_method_adj_matrix == :from_lfr
+      cmap(x) = x < 0 ? CairoMakie.Makie.RGB{Float64}(1.0, 1 + x, 1 + x) : CairoMakie.Makie.RGB{Float64}(1 - x, 1 - x, 1.0)
+      node_colors = map(cmap, ω_0)
+      graph = Graphs.SimpleGraphs.SimpleGraph(adj_matrix)
+      n_edges = Graphs.ne(graph)
+
+      # Plot the graph using 3 different layouts
+      for layout in [:Stress, :Spring, :Shell]
+        layout_name = lowercase(string(layout))
+        if layout == :Stress && !Graphs.is_connected(graph)
+          @warn "The graph is not connected, skipping layout '$layout_name'"
+          continue
+        end
+        layout_fn = joinpath(store_dir, "graph_$(layout_name).svg")
+        try
+          fig = CairoMakie.Figure(size=(2000, 2000))
+          ax = CairoMakie.Axis(fig[1, 1])
+          CairoMakie.hidedecorations!(ax)
+          GraphMakie.graphplot!(ax, graph; layout=getfield(GraphMakie, layout)(), node_color=node_colors, alpha=0.1, edge_width=0.1)
+          CairoMakie.save(layout_fn, fig)
+          @info "Graph view saved at $(layout_fn)"
+        catch
+          @warn "Graph view failed with layout '$layout_name' (disconnected graph?)"
+        end
+      end
+
       fig = M.Figure(size=(2048, 1152))
       c = M.Makie.ColorSchemes.Paired_12.colors
 

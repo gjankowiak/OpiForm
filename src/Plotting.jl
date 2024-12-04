@@ -36,6 +36,7 @@ function compute_stddev(ω, centers)
 end
 
 function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfield_single_dir::String; kwargs...)
+
   i_micro = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "i")
   ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
 
@@ -55,9 +56,24 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
   ax1.title = "f"
 
   N = size(f, 1)
+  N_micro = size(ω, 1)
   x = build_x(N)
 
-  obs_ω = M.@lift ω[:, $obs_i]
+  c_ids = get(kwargs, :community_ids, fill(1, N_micro))
+  c_sizes = [count(==(k), c_ids) for k in 1:n_groups]
+
+  if isempty(c_ids)
+    @warn "No communities IDs provided for plotting"
+    obs_ω = [M.@lift ω[:, $obs_i]]
+  else
+    obs_ω = [M.@lift ω[findall(==(k), c_ids), $obs_i] for k in 1:n_groups]
+  end
+
+  bins = M.lift((i) -> range(extrema(ω[:, i])...; length=51), obs_i)
+  c_weights = [fill(N_micro / c_sizes[k], c_sizes[k]) for k in 1:n_groups]
+
+  @show c_sizes
+  @show c_weights
 
   obs_f_single = M.@lift f_single[:, 1, $obs_i]
 
@@ -69,7 +85,9 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
     M.lines!(ax1, x, obs_f[k], linewidth=2)
   end
 
-  M.hist!(ax1, obs_ω, bins=51, normalization=:pdf)
+  for k in axes(obs_ω, 1)
+    M.hist!(ax1, obs_ω[k], bins=bins, normalization=:pdf, weights=c_weights[k])
+  end
 
   stride = get(kwargs, :stride, 1)
   first_idx = get(kwargs, :first_idx, 1)
@@ -770,7 +788,9 @@ function plot_results_no_g(; output_filename::String="",
   prefix = longest_prefix(dirs, existing_dir=true)
 
 
-  effective_output_filename = if center_micro
+  effective_output_filename = if length(output_filename)
+    "$prefix/$(output_filename)"
+  elseif center_micro
     "$prefix/movie_without_g_centered.mp4"
   else
     "$prefix/movie_without_g.mp4"

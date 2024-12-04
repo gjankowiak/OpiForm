@@ -393,7 +393,7 @@ function scale_f_α(params::NamedTuple)
 end
 
 # filter for NamedTuples only from v1.11
-filter_nt_fields = if VERSION < v"1.11"
+filter_nt_fields = if VERSION < v"1.11" || true
   (f, nt) -> begin
     NamedTuple{filter(f, keys(nt))}(nt)
   end

@@ -496,6 +496,10 @@ function initialize_LFR(params::NamedTuple, lfr_args...; lfr_kwargs...)
   c_ids_sorted = sort(c_ids)
   n_communities = length(unique(c_ids_sorted))
 
+  if n_communities != params.init_lfr_target_n_communities
+    return SpA.sparse(g), Float64[], c_ids, Int64[]
+  end
+
   # NOTE: this is where the distribution of initial opinions is defined/sampled
 
   # rescale bounds to [0, 1]

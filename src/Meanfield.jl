@@ -683,12 +683,7 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       else
         f .-= params.δt / params.δx * mfl_λ * df
         if !params.constant_g
-          if params.f_dependent_g
-            # DEFINITION G
-            g .= (f .* α .* f') ./ params.connection_density
-          else
-            g .-= params.δt / params.δx * mfl_λ * dg
-          end
+          g .-= params.δt / params.δx * mfl_λ * dg
         end
       end
       if get(params, :enable_backtrace, false)

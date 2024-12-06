@@ -35,7 +35,15 @@ function compute_stddev(ω, centers)
   return sqrt.(vec(sum((ω .- centers') .^ 2; dims=1)) / N)
 end
 
-function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfield_single_dir::String; kwargs...)
+function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfield_single_dir::String;
+  scale_x::Bool=false,
+  xlims::Union{Nothing,Vector{Float64}}=nothing, ylims::Union{Nothing,Vector{Float64}}=nothing,
+  kwargs...)
+
+  yellow = M.Makie.RGBAf(0.95, 0.69, 0.20, 0.5)
+  blue = M.Makie.RGBAf(0.165, 0.537, 0.757, 0.5)
+
+  colors = [blue, yellow]
 
   i_micro = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "i")
   ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
@@ -51,7 +59,7 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
   obs_i = M.Observable(1)
   obs_iter = M.Observable(0)
 
-  fig = M.Figure(size=(1920, 1080))
+  fig = M.Figure(size=(1920, 1080), fontsize=40, figure_padding=100)
   ax1 = M.Axis(fig[1, 1])
   ax1.title = "f"
 
@@ -72,27 +80,32 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
   bins = M.lift((i) -> range(extrema(ω[:, i])...; length=51), obs_i)
   c_weights = [fill(N_micro / c_sizes[k], c_sizes[k]) for k in 1:n_groups]
 
-  @show c_sizes
-  @show c_weights
+  obs_f = [M.@lift f[:, k, $obs_i] for k in 1:n_groups]
 
   obs_f_single = M.@lift f_single[:, 1, $obs_i]
 
-  obs_f = [M.@lift f[:, k, $obs_i] for k in 1:n_groups]
-
-  M.lines!(ax1, x, obs_f_single, linestyle=:dot, color=:black, linewidth=2)
+  for k in axes(obs_ω, 1)
+    M.hist!(ax1, obs_ω[k], bins=bins, normalization=:pdf,
+      weights=c_weights[k], color=colors[k])
+    M.stephist!(ax1, obs_ω[k], bins=bins, normalization=:pdf,
+      weights=c_weights[k], color=:black)
+  end
 
   for k in 1:n_groups
-    M.lines!(ax1, x, obs_f[k], linewidth=2)
+    M.lines!(ax1, x, obs_f[k], linewidth=7, color=:black)
   end
 
-  for k in axes(obs_ω, 1)
-    M.hist!(ax1, obs_ω[k], bins=bins, normalization=:pdf, weights=c_weights[k])
+  for k in 1:n_groups
+    M.lines!(ax1, x, obs_f[k], linewidth=5)
   end
+
+  M.lines!(ax1, x, obs_f_single, linestyle=:dash, color=:black, linewidth=7)
 
   stride = get(kwargs, :stride, 1)
   first_idx = get(kwargs, :first_idx, 1)
   last_idx = get(kwargs, :last_idx, lastindex(i_mfl))
   i_range = enumerate([first_idx:stride:last_idx; last_idx])
+
 
   function step_i(ii_i_tuple)
 
@@ -100,20 +113,43 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
 
     iter = i_mfl[i]
 
+    obs_i[] = i
+    obs_iter[] = iter
+
     pct = lpad(Int(round(100 * ii / length(i_range))), 3, " ")
     print("  Creating movie: $pct%" * "\b"^50 * ", current iteration: $iter")
+
+    min_x = minimum(view(ω, :, obs_i[]))
+    max_x = maximum(view(ω, :, obs_i[]))
+
+    f_max = maximum(obs_f_single[])
+
+    if !isnothing(xlims)
+      M.xlims!(ax1, low=xlims[1], high=xlims[2])
+    else
+      if scale_x
+        M.xlims!(ax1, low=min_x, high=max_x)
+      end
+    end
+    if isnothing(ylims)
+      M.ylims!(ax1, low=max(-1, -0.05 * f_max), high=1.3 * f_max)
+    else
+      M.ylims!(ax1, low=ylims[1], high=ylims[2])
+    end
 
     # if any(isnan, f[:, i])
     #   @error "Got NaN in f"
     #   return
     # end
 
-    obs_i[] = i
-    obs_iter[] = iter
-
     # first_mass = 2 / N * sum(f[:, i])
     # ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
-    # ax1.title = string(iter)
+    ax1.title = ""
+    ax1.xlabel = M.L"\omega"
+
+    if i % 10 == 0
+      M.save(joinpath(meanfield_dir, "movie_snapshot_$(i).png"), fig)
+    end
   end
 
   effective_output_filename = joinpath(meanfield_dir, "movie.mp4")

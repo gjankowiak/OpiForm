@@ -61,6 +61,7 @@ import Distributions
 
 import CairoMakie as M
 import CairoMakie
+import CairoMakie.Makie.ColorTypes
 
 import KernelDensity
 import KernelDensitySJ

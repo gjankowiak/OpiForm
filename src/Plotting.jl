@@ -16,6 +16,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import CairoMakie.Makie.ColorTypes
+
 function p_to_color(p; pmin=0, pmax=1, mapping=identity, color_min=M.RGBf(0.25, 0.25, 0.25), color_max=M.RGBf(0.0, 0.0, 1.0), reverse=false)
   λ = (mapping(p) - mapping(pmin)) / (mapping(pmax) - mapping(pmin))
   if reverse
@@ -40,10 +42,12 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
   xlims::Union{Nothing,Vector{Float64}}=nothing, ylims::Union{Nothing,Vector{Float64}}=nothing,
   kwargs...)
 
-  yellow = M.Makie.RGBAf(0.95, 0.69, 0.20, 0.5)
-  blue = M.Makie.RGBAf(0.165, 0.537, 0.757, 0.5)
 
-  colors = [blue, yellow]
+  wong_alphed = map(CairoMakie.Makie.wong_colors()) do c
+    return CairoMakie.Makie.ColorTypes.RGBA(c.r, c.g, c.b, 0.5)
+  end
+
+  colors = wong_alphed
 
   i_micro = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "i")
   ω = load_hdf5_data(joinpath(micro_dir, "data.hdf5"), "omega")
@@ -144,7 +148,7 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
 
     # first_mass = 2 / N * sum(f[:, i])
     # ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
-    ax1.title = ""
+    ax1.title = "Iteration: $iter"
     ax1.xlabel = M.L"\omega"
 
     if i % 10 == 0

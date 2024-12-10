@@ -100,6 +100,7 @@ function compute_df!(dst, params::NamedTuple, f, a, a_prime, iteration::Int)
 
     flux_l = 0.5 * (f_l .* a_l .+ f .* a .- params.LF_relaxation * max_C_l .* (f .- f_l))
     flux_r = 0.5 * (f_r .* a_r .+ f .* a .- params.LF_relaxation * max_C_r .* (f_r .- f))
+    # checked in the case of multiple groups
   elseif params.flux == :LF
     # Lax-Friedrich
     throw("Not implemented")
@@ -443,9 +444,11 @@ function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, 
     g_mass_inv = 1 ./ g_mass
     g_mass_inv[g_mass_inv.>1/params.int_threshold] .= 0
     η = g .* g_mass_inv
+    # the above has been checked in the case of groups
   end
 
   EB = reshape(params.δx * sum(η .* params.D_matrix; dims=(2, 4)), (params.N_mfl, n_groups))
+  # the above has been checked in the case of groups
 
   # Check the normalization.
   # Original model: chamber_size = 1

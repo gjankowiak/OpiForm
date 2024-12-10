@@ -656,6 +656,22 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
           @warn err.msg
         elseif params.CFL_violation == :abort
           @error err.msg
+
+          store_pairs = vcat(
+            ["i" => store_i, "f" => cat(store_f...; dims=3)],
+          )
+          if !params.constant_g
+            append!(store_pairs,
+              ["g_end" => g]
+            )
+            if params.store_g
+              append!(store_pairs,
+                ["g/$i" => g for (i, g) in store_g],
+              )
+            end
+          end
+          store_hdf5_data(hdf5_data_path, store_pairs)
+
           if get(params, :enable_backtrace, false)
             store_hdf5_data(joinpath(store_dir, "data.hdf5"), ["backtrace_f" => backtrace_f, "backtrace_g" => backtrace_g])
             @info "Backtrace saved to $(hdf5_data_path)"

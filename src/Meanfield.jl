@@ -465,17 +465,17 @@ function compute_a!(a_dst, a_prime_dst, µ_dst, µC_dst, params::NamedTuple, f, 
   end
 end
 
-function compute_f_stats(f::Vector{Float64}, g::Matrix{Float64}, x::AbstractVector)
+function compute_f_stats(f::Array{Float64}, g::Array{Float64}, x::AbstractVector)
   g_M1_n = compute_g_M1_normalized(g, x)
   f_var = compute_f_var(f, x, g_M1_n)
   return (g_M1_n=g_M1_n, f_var=f_var)
 end
 
-function compute_g_M1_normalized(g::Matrix{Float64}, x::AbstractVector)
+function compute_g_M1_normalized(g::Array{Float64}, x::AbstractVector)
   return sum(x .* g) / sum(g)
 end
 
-function compute_f_var(f::Vector{Float64}, x::AbstractVector, center::Float64)
+function compute_f_var(f::Array{Float64}, x::AbstractVector, center::Float64)
   δx = x[2] - x[1]
   M2 = sum(f .* (x .- center) .^ 2) * δx
   return M2
@@ -561,9 +561,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       store_g = [(0, copy(g))]
     end
     # FIXME:
-    # f_stats = compute_f_stats(f, g, x)
-    # store_g_M1_n = [f_stats.g_M1_n]
-    # store_f_var = [f_stats.f_var]
+    f_stats = compute_f_stats(f, g, x)
+    store_g_M1_n = [f_stats.g_M1_n]
+    store_f_var = [f_stats.f_var]
   end
 
   # Initial mass
@@ -662,6 +662,10 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
           )
           if !params.constant_g
             append!(store_pairs,
+              ["f_var" => store_f_var],
+              ["g_M1_n" => store_g_M1_n]
+            )
+            append!(store_pairs,
               ["g_end" => g]
             )
             if params.store_g
@@ -716,9 +720,9 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
       push!(store_i, i)
       push!(store_f, copy(f))
       if !params.constant_g
-        # f_stats = compute_f_stats(f, g, x)
-        # push!(store_g_M1_n, f_stats.g_M1_n)
-        # push!(store_f_var, f_stats.f_var)
+        f_stats = compute_f_stats(f, g, x)
+        push!(store_g_M1_n, f_stats.g_M1_n)
+        push!(store_f_var, f_stats.f_var)
         if params.store_g
           push!(store_g, (i, copy(g)))
           if length(store_g) > 100
@@ -735,10 +739,10 @@ function launch(store_dir::String, params_in::NamedTuple; force::Bool=false)
     ["i" => store_i, "f" => cat(store_f...; dims=3)],
   )
   if !params.constant_g
-    # append!(store_pairs,
-    #   ["f_var" => store_f_var],
-    #   ["g_M1_n" => store_g_M1_n]
-    # )
+    append!(store_pairs,
+      ["f_var" => store_f_var],
+      ["g_M1_n" => store_g_M1_n]
+    )
     append!(store_pairs,
       ["g_end" => g]
     )

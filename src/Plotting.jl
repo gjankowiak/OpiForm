@@ -27,6 +27,19 @@ function p_to_color(p; pmin=0, pmax=1, mapping=identity, color_min=M.RGBf(0.25, 
   end
 end
 
+mean = (f::Function, v::AbstractArray) -> sum(f.(v)) / length(v)
+
+function linreg(x, y)
+  sol = [ones(length(x)) x] \ y
+  e = mean(abs2, sol[2] * x .+ sol[1] - y)
+  return (a=sol[2], b=sol[1], mean_square_residue=e)
+end
+
+function compute_rate_regression(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
+  idc = searchsortedfirst(i_a * δt, cutoff_time)
+  return linreg(δt * i_a[1:idc], log.(p2p_a[1:idc]))
+end
+
 function compute_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
   idc = searchsortedfirst(i_a * δt, cutoff_time)
   return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
@@ -43,6 +56,7 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
   kwargs...)
 
 
+  wong_classic = CairoMakie.Makie.wong_colors()
   wong_alphed = map(CairoMakie.Makie.wong_colors()) do c
     return CairoMakie.Makie.ColorTypes.RGBA(c.r, c.g, c.b, 0.5)
   end
@@ -58,7 +72,25 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
   i_mfl_single = load_hdf5_data(joinpath(meanfield_single_dir, "data.hdf5"), "i")
   f_single = load_hdf5_data(joinpath(meanfield_single_dir, "data.hdf5"), "f")
 
+  has_single = !isnothing(f_single)
+
+  N = size(f, 1)
+  N_micro = size(ω, 1)
+  x = build_x(N)
+
   n_groups = size(f, 2)
+
+  c_ids = get(kwargs, :community_ids, fill(1, N_micro))
+  c_sizes = [count(==(k), c_ids) for k in 1:n_groups]
+
+  if !isempty(c_ids)
+    ω0_grouped = [ω[findall(==(k), c_ids), 1] for k in 1:n_groups]
+    group_perm = sortperm(map(ω0_grouped) do group
+      return sum(group) / length(group)
+    end)
+  else
+    group_perm = 1:n_groups
+  end
 
   obs_i = M.Observable(1)
   obs_iter = M.Observable(0)
@@ -67,26 +99,21 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
   ax1 = M.Axis(fig[1, 1])
   ax1.title = "f"
 
-  N = size(f, 1)
-  N_micro = size(ω, 1)
-  x = build_x(N)
-
-  c_ids = get(kwargs, :community_ids, fill(1, N_micro))
-  c_sizes = [count(==(k), c_ids) for k in 1:n_groups]
-
   if isempty(c_ids)
     @warn "No communities IDs provided for plotting"
     obs_ω = [M.@lift ω[:, $obs_i]]
   else
-    obs_ω = [M.@lift ω[findall(==(k), c_ids), $obs_i] for k in 1:n_groups]
+    obs_ω = [M.@lift ω[findall(==(k), c_ids), $obs_i] for k in group_perm]
   end
 
   bins = M.lift((i) -> range(extrema(ω[:, i])...; length=51), obs_i)
-  c_weights = [fill(N_micro / c_sizes[k], c_sizes[k]) for k in 1:n_groups]
+  c_weights = [fill(N_micro / c_sizes[k], c_sizes[k]) for k in group_perm]
 
-  obs_f = [M.@lift f[:, k, $obs_i] for k in 1:n_groups]
+  obs_f = [M.@lift f[:, k, $obs_i] for k in group_perm]
 
-  obs_f_single = M.@lift f_single[:, 1, $obs_i]
+  if has_single
+    obs_f_single = M.@lift f_single[:, 1, $obs_i]
+  end
 
   for k in axes(obs_ω, 1)
     M.hist!(ax1, obs_ω[k], bins=bins, normalization=:pdf,
@@ -95,15 +122,17 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
       weights=c_weights[k], color=:black)
   end
 
-  for k in 1:n_groups
+  for k in group_perm
     M.lines!(ax1, x, obs_f[k], linewidth=7, color=:black)
   end
 
-  for k in 1:n_groups
-    M.lines!(ax1, x, obs_f[k], linewidth=5)
+  for k in group_perm
+    M.lines!(ax1, x, obs_f[k], linewidth=5, color=wong_classic[k])
   end
 
-  M.lines!(ax1, x, obs_f_single, linestyle=:dash, color=:black, linewidth=7)
+  if has_single
+    M.lines!(ax1, x, obs_f_single, color=:black, linewidth=7)
+  end
 
   stride = get(kwargs, :stride, 1)
   first_idx = get(kwargs, :first_idx, 1)
@@ -126,7 +155,9 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
     min_x = minimum(view(ω, :, obs_i[]))
     max_x = maximum(view(ω, :, obs_i[]))
 
-    f_max = maximum(obs_f_single[])
+    if has_single
+      f_max = maximum(obs_f_single[])
+    end
 
     if !isnothing(xlims)
       M.xlims!(ax1, low=xlims[1], high=xlims[2])
@@ -1141,6 +1172,195 @@ function compare_variance_er(
   end
 end
 
+# function compare_variance_lfr_multi(
+#   micro_dir::String,
+#   meanfield_dir::String,
+#   meanfield_mono_dir::String,
+#   parameter_name::String,
+#   parameter_extractor::Function;
+#   cutoff_factor::Float64=1.0,
+#   t_max::Real=0,
+#   stddev_min::Real=0
+# )
+#
+#   # check that the dirs actually exist
+#   dirs = [micro_dir, meanfield_dir, meanfield_mono_dir])
+#     @assert all(isdir, dirs)
+#
+#   i_mfl = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "i")
+#   f = load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "f")
+#   params_mfl = Params.from_toml(meanfield_dir)
+#   indep_param_mfl = parameter_extractor(params_mfl)
+#
+#   N_mfl = size(f, 1)
+#
+#   f_stddev = sqrt.(load_hdf5_data(joinpath(meanfield_dir, "data.hdf5"), "f_var"))
+#   rates_mfl = compute_rate(i_mfl, f_stddev, params_mfl.δt; cutoff_time=cutoff_factor * params_mfl.δt * i_mfl[end])
+#
+#   split_dir_names = split_run_path(meanfield_dirs)
+#   prev_prefix = split_dir_names[1][1]
+#
+#   aggregates_mfl = Dict{Symbol,Any}[]
+#   aggregate = Dict{Symbol,Any}()
+#   rates_acc = Float64[]
+#   stddev_acc = Vector{Float64}[]
+#   prefix_n = 0
+#
+#     for (i, p) in enumerate(split_dir_names)
+#       if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+#         aggregate[:rates] = sum(rates_acc) / prefix_n
+#         aggregate[:param] = indep_param_mfl_a[i-1]
+#         aggregate[:time] = i_mfl_a[i-1] * params_mfl_a[i-1].δt
+#         aggregate[:stddev] = sum(stddev_acc) / prefix_n
+#         push!(aggregates_mfl, aggregate)
+#         aggregate = Dict{Symbol,Any}()
+#         empty!(rates_acc)
+#         empty!(stddev_acc)
+#         prefix_n = 0
+#         prev_prefix = p[1]
+#       end
+#       push!(rates_acc, rates_mfl_a[i])
+#       push!(stddev_acc, f_stddev_a[i])
+#       prefix_n += 1
+#     end
+#
+#   end
+#
+#
+#   if K_d > 0
+#     labels_d = map(dn -> endswith("/", dn) ? basename(dirname(dn)) : basename(dn), micro_dirs)
+#     i_d_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "i"), micro_dirs)
+#     ω_a = map(dn -> load_hdf5_data(joinpath(dn, "data.hdf5"), "omega"), micro_dirs)
+#     params_d_a = map(Params.from_toml, micro_dirs)
+#     indep_param_d_a = map(parameter_extractor, params_d_a)
+#
+#     adj_matrix_a = map(dn -> load_hdf5_sparse(joinpath(dn, "data.hdf5"), "adj_matrix"), micro_dirs)
+#     #adj_matrix_a = map(adj_matrix_full -> isnothing(adj_matrix_full) ? nothing : SpA.sparse(adj_matrix_full), adj_matrix_full_a)
+#     N_micro_a = map(ω -> size(ω, 1), ω_a)
+#
+#     function compute_weighted_avg(k)
+#       adj_matrix = adj_matrix_a[k]
+#       ω = ω_a[k]
+#       N_micro = N_micro_a[k]
+#
+#       if !isnothing(adj_matrix)
+#         sharp_I = vec(sum(adj_matrix; dims=2))
+#         n_connections = sum(sharp_I)
+#
+#         return [sum(ω[:, k] .* sharp_I) ./ n_connections for k in axes(ω, 2)]
+#       else
+#         return [sum(ω[:, k]) / (N_micro - 1) for k in axes(ω, 2)]
+#       end
+#     end
+#
+#     ω_inf_d_a = [compute_weighted_avg(k) for k in 1:K_d]
+#     p2p_d_a = [peak2peak(ω; dims=1) for ω in ω_a]
+#     extrema_d_a = [extrema(ω; dims=1) for ω in ω_a]
+#     stddevs_d_a = [compute_stddev(ω_a[k], ω_inf_d_a[k]) for k in 1:K_d]
+#     rates_d_a = [compute_rate(i_d_a[k], stddevs_d_a[k], params_d_a[k].δt; cutoff_time=cutoff_factor * params_d_a[k].δt * i_d_a[k][end]) for k in 1:K_d]
+#
+#     split_dir_names = split_run_path(micro_dirs)
+#     prev_prefix = split_dir_names[1][1]
+#
+#     aggregates_d = Dict{Symbol,Any}[]
+#     aggregate = Dict{Symbol,Any}()
+#     rates_acc = Float64[]
+#     stddev_acc = Vector{Float64}[]
+#     prefix_n = 0
+#
+#     for (i, p) in enumerate(split_dir_names)
+#       if (p[1] != prev_prefix && i != 1) || (i == lastindex(split_dir_names) && prefix_n > 0)
+#         aggregate[:rates] = sum(rates_acc) / prefix_n
+#         aggregate[:param] = indep_param_d_a[i-1]
+#         aggregate[:time] = i_d_a[i-1] * params_d_a[i-1].δt
+#         aggregate[:stddev] = sum(stddev_acc) / prefix_n
+#         push!(aggregates_d, aggregate)
+#         aggregate = Dict{Symbol,Any}()
+#         empty!(rates_acc)
+#         empty!(stddev_acc)
+#         prefix_n = 0
+#         prev_prefix = p[1]
+#       end
+#       push!(rates_acc, rates_d_a[i])
+#       push!(stddev_acc, stddevs_d_a[i])
+#       prefix_n += 1
+#     end
+#
+#   end
+#
+#   mfl_param = map(x -> x[:param], aggregates_mfl)
+#   mfl_rates = map(x -> x[:rates], aggregates_mfl)
+#
+#   d_param = map(x -> x[:param], aggregates_d)
+#   d_rates = map(x -> x[:rates], aggregates_d)
+#
+#   mean = (v) -> sum(v) / length(v)
+#
+#   t_stars = [mean(a["t_star"]) for a in aggregates]
+#   clustering = [mean(a["clustering"]) for a in aggregates]
+#
+#   fig = M.Figure(size=(1920, 1080))
+#   ax1 = M.Axis(fig[1, 1], yscale=log10, xlabel="time", title="Standard deviations")
+#   ax2 = M.Axis(fig[1, 2], xlabel="$(parameter_name)", title="Convergence rates", xscale=log10, yscale=M.Makie.pseudolog10)
+#   ax3 = M.Axis(fig[1, 3], xlabel="T*", ylabel="Convergence rate", xscale=log10)
+#   ax4 = M.Axis(fig[1, 4], xlabel="Clustering coeff.", xscale=identity)
+#
+#   M.linkyaxes!(ax2, ax3, ax4)
+#
+#   mfl_cutoff = cutoff_factor * params_mfl_a[1].δt * i_mfl_a[1][end]
+#
+#   M.vspan!(ax1, 0.0, mfl_cutoff; color=(:blue, 0.1))
+#
+#   for (i, a_d) in enumerate(aggregates_d)
+#     label = i == 1 ? "Micro" : nothing
+#     M.lines!(ax1, a_d[:time], a_d[:stddev], label=label, linestyle=:dot,
+#       color=p_to_color(a_d[:param]; mapping=log10, pmin=minimum(d_param), pmax=maximum(d_param)))
+#   end
+#
+#   for (i, a_mfl) in enumerate(aggregates_mfl)
+#     label = i == 1 ? "MFL" : nothing
+#     M.lines!(ax1, a_mfl[:time], a_mfl[:stddev], label=label,
+#       color=p_to_color(a_mfl[:param]; mapping=log10, pmin=minimum(mfl_param), pmax=maximum(mfl_param)))
+#   end
+#
+#   M.lines!(ax2, d_param, d_rates, label="Micro", linestyle=:dot, color=:blue)
+#   M.lines!(ax2, mfl_param, mfl_rates, label="MFL", color=:blue)
+#
+#   M.lines!(ax3, t_stars, d_rates, label="Micro", linestyle=:dot, color=:blue)
+#   M.lines!(ax3, t_stars, mfl_rates, label="MFL", color=:blue)
+#
+#   M.lines!(ax4, clustering, d_rates, label="Micro", linestyle=:dot, color=:blue)
+#   M.lines!(ax4, clustering, mfl_rates, label="MFL", color=:blue)
+#
+#   if t_max > 0
+#     M.xlims!(ax1, low=0, high=t_max)
+#   end
+#
+#   if stddev_min > 0
+#     M.ylims!(ax1, low=stddev_min)
+#   end
+#
+#   M.axislegend(ax1)
+#   M.axislegend(ax2, position=:lt)
+#   M.axislegend(ax3)
+#   M.axislegend(ax4)
+#
+#   M.save("$prefix/comparison.png", fig)
+#   M.save("$prefix/comparison.svg", fig)
+#   @info "Plot saved at:"
+#   @info "$prefix/comparison.svg"
+#   @info "$prefix/comparison.png"
+#
+#   try
+#     display(fig)
+#   catch
+#     @error "Cannot display plot window, are you logged in over SSH?"
+#   end
+#
+#   return (aggregates_micro=aggregates_d, aggregates_mfl=aggregates_mfl, mfl_cutoff=mfl_cutoff)
+#
+# end
+
 function compare_variance_ensemble_average(
   meanfield_dirs::Vector{String},
   micro_dirs::Vector{String},
@@ -1391,7 +1611,6 @@ function compare_variance_ba_EA(
     cutoff_factor=cutoff_factor
   )
 end
-
 function compare_variance_lfr_EA(
   meanfield_dirs::Vector{String},
   micro_dirs::Vector{String};
@@ -1403,6 +1622,26 @@ function compare_variance_lfr_EA(
     meanfield_dirs,
     micro_dirs,
     "µ (LFR)",
+    x -> x.init_lfr_kwargs.mixing_parameter;
+    cutoff_factor=cutoff_factor,
+    t_max=t_max,
+    stddev_min=stddev_min
+  )
+end
+
+function compare_variance_lfr_multi(
+  micro_dir::String;
+  meanfield_dir::String,
+  meanfield_mono_dir::String,
+  cutoff_factor::Float64=1.0,
+  t_max::Real=0,
+  stddev_min::Real=0
+)
+  return compare_variance_lfr_multi(
+    micro_dir,
+    meanfield_dir,
+    meanfield_mono_dir,
+    "μ (LFR)",
     x -> x.init_lfr_kwargs.mixing_parameter;
     cutoff_factor=cutoff_factor,
     t_max=t_max,

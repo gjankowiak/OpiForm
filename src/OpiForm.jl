@@ -109,4 +109,6 @@ include("MeanfieldMono.jl")
 include("Meanfield.jl")
 include("Micro.jl")
 
+include("Postprocessing.jl")
+
 end

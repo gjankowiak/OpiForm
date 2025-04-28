@@ -18,42 +18,12 @@
 
 import CairoMakie.Makie.ColorTypes
 
-function p_to_color(p; pmin=0, pmax=1, mapping=identity, color_min=M.RGBf(0.25, 0.25, 0.25), color_max=M.RGBf(0.0, 0.0, 1.0), reverse=false)
-  λ = (mapping(p) - mapping(pmin)) / (mapping(pmax) - mapping(pmin))
-  if reverse
-    return λ * color_min + (1 - λ) * color_max
-  else
-    return (1 - λ) * color_min + λ * color_max
-  end
-end
-
-mean = (f::Function, v::AbstractArray) -> sum(f.(v)) / length(v)
-
-function linreg(x, y)
-  sol = [ones(length(x)) x] \ y
-  e = mean(abs2, sol[2] * x .+ sol[1] - y)
-  return (a=sol[2], b=sol[1], mean_square_residue=e)
-end
-
-function compute_rate_regression(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
-  idc = searchsortedfirst(i_a * δt, cutoff_time)
-  return linreg(δt * i_a[1:idc], log.(p2p_a[1:idc]))
-end
-
-function compute_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
-  idc = searchsortedfirst(i_a * δt, cutoff_time)
-  return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
-end
-
-function compute_stddev(ω, centers)
-  N = size(ω, 1)
-  return sqrt.(vec(sum((ω .- centers') .^ 2; dims=1)) / N)
-end
-
 function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfield_single_dir::String;
   scale_x::Bool=false,
   xlims::Union{Nothing,Vector{Float64}}=nothing, ylims::Union{Nothing,Vector{Float64}}=nothing,
   kwargs...)
+
+  params_mfl = Params.from_toml(meanfield_dir)
 
 
   wong_classic = CairoMakie.Makie.wong_colors()
@@ -136,7 +106,7 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
 
   stride = get(kwargs, :stride, 1)
   first_idx = get(kwargs, :first_idx, 1)
-  last_idx = get(kwargs, :last_idx, lastindex(i_mfl))
+  last_idx = get(kwargs, :last_idx, min(lastindex(i_mfl), lastindex(i_mfl_single)))
   i_range = enumerate([first_idx:stride:last_idx; last_idx])
 
 
@@ -179,7 +149,7 @@ function plot_ω_f_with_single(micro_dir::String, meanfield_dir::String, meanfie
 
     # first_mass = 2 / N * sum(f[:, i])
     # ax1.title = "$iter, M[1] = $(round(first_mass; digits=6))"
-    ax1.title = "Iteration: $iter"
+    ax1.title = M.L"\sigma_\beta^2 = %$(params_mfl.init_lfr_kwargs.β_σ²), \mu = %$(params_mfl.init_lfr_kwargs.mixing_parameter), time: %$(round(iter*params_mfl.δt; digits=2))"
     ax1.xlabel = M.L"\omega"
 
     if i % 10 == 0
@@ -882,7 +852,7 @@ function plot_g_init_multi(store_dir::String; g_max::Float64=2.0)
 
   n_groups = size(g, 3)
 
-  fig = M.Figure(size=(n_groups * 100, n_groups * 100), figure_padding=0)
+  fig = M.Figure(size=(n_groups * 300, n_groups * 300), figure_padding=0)
   axes = [M.Axis(fig[i, j], aspect=1) for i in 1:n_groups, j in 1:n_groups]
   #ax.title = "g(ω,m)"L
   for i in 1:n_groups
@@ -900,6 +870,7 @@ function plot_g_init_multi(store_dir::String; g_max::Float64=2.0)
   #M.heatmap!(ax, x, x, g, colorrange=(1e-3, g_max), colormap=:haline, lowclip=:black)
 
   M.save("$store_dir/g_init.png", fig)
+  @info "Stored $store_dir/g_init.png"
 end
 
 function plot_g_init(store_dir::String; g_max::Float64=2.0)

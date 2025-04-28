@@ -351,3 +351,48 @@ function beta_μσ²_to_ab(μ, σ²)
   b = (1 - µ) * ν
   return a, b
 end
+
+function unzip(v::AbstractArray)
+  return vcat([[row...]' for row in v]...)
+end
+
+function p_to_color(p; pmin=0, pmax=1, mapping=identity, color_min=M.RGBf(0.25, 0.25, 0.25), color_max=M.RGBf(0.0, 0.0, 1.0), reverse=false)
+  λ = (mapping(p) - mapping(pmin)) / (mapping(pmax) - mapping(pmin))
+  if reverse
+    return λ * color_min + (1 - λ) * color_max
+  else
+    return (1 - λ) * color_min + λ * color_max
+  end
+end
+
+mean = (f::Function, v::AbstractArray) -> sum(f.(v)) / length(v)
+
+function linreg(x, y)
+  sol = [ones(length(x)) x] \ y
+  e = mean(abs2, sol[2] * x .+ sol[1] - y)
+  e_r = mean(abs, ((sol[2] * x .+ sol[1] - y) ./ y))
+  return (a=sol[2], b=sol[1], mean_square_residue=e, mean_error=e_r)
+end
+
+function compute_rate_regression(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
+  idc = searchsortedfirst(i_a * δt, cutoff_time)
+  return linreg(δt * i_a[1:idc], log.(p2p_a[1:idc]))
+end
+
+function compute_rate_regression(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; t_min::Real=0.0, t_max::Real=Inf)
+  idc_min = searchsortedfirst(i_a * δt, t_min)
+  idc_max = searchsortedlast(i_a * δt, t_max)
+  @show "Regression with $(idc_max - idc_min + 1) samples"
+  return linreg(δt * i_a[idc_min:idc_max], log.(p2p_a[idc_min:idc_max]))
+end
+
+function compute_rate(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
+  idc = searchsortedfirst(i_a * δt, cutoff_time)
+  return -log(p2p_a[idc] / p2p_a[1]) / (δt * i_a[idc])
+end
+
+function compute_stddev(ω, centers)
+  N = size(ω, 1)
+  return sqrt.(vec(sum((ω .- centers') .^ 2; dims=1)) / N)
+end
+

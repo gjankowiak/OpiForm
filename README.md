@@ -10,7 +10,7 @@ This one liner will setup OpiForm for you:
 
 Switch to the OpiForm directory, you should then be ready to run the example:
 
-    $ julia --project=. include("example.jl")
+    julia --project=. -e 'include("example.jl")'
 
 ## Parameters
 

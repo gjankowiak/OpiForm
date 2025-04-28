@@ -374,11 +374,6 @@ function linreg(x, y)
   return (a=sol[2], b=sol[1], mean_square_residue=e, mean_error=e_r)
 end
 
-function compute_rate_regression(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; cutoff_time::Float64=5.0)
-  idc = searchsortedfirst(i_a * δt, cutoff_time)
-  return linreg(δt * i_a[1:idc], log.(p2p_a[1:idc]))
-end
-
 function compute_rate_regression(i_a::Vector{Int64}, p2p_a::Vector{Float64}, δt::Float64; t_min::Real=0.0, t_max::Real=Inf)
   idc_min = searchsortedfirst(i_a * δt, t_min)
   idc_max = searchsortedlast(i_a * δt, t_max)

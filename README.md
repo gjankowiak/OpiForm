@@ -10,7 +10,7 @@ This one liner will setup OpiForm for you:
 
 Switch to the OpiForm directory, you should then be ready to run the example:
 
-    julia --project=. -e 'include("example.jl")'
+    julia --project=. -e 'include("examples/paper/beta_2_with_var/run_monoproc.jl")'
 
 ## Parameters
 
